@@ -1,0 +1,62 @@
+name: Release to QGIS Plugin Repository
+
+on:
+  push:
+    tags:
+      - 'v*'   # Se déclenche sur chaque tag comme v2.0.1, v3.0.0, etc.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extraire la version depuis le tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Mettre à jour version dans metadata.txt
+        run: sed -i "s/^version=.*/version=${{ steps.version.outputs.VERSION }}/" metadata.txt
+
+      - name: Créer le ZIP
+        run: |
+          mkdir -p /tmp/ATLAS_Index_Pro
+          cp -r . /tmp/ATLAS_Index_Pro/
+          # Exclure les fichiers inutiles
+          rm -rf /tmp/ATLAS_Index_Pro/.git
+          rm -rf /tmp/ATLAS_Index_Pro/.github
+          rm -f /tmp/ATLAS_Index_Pro/README.md
+          rm -f /tmp/ATLAS_Index_Pro/CHANGELOG.md
+          rm -f /tmp/ATLAS_Index_Pro/LICENSE
+          cd /tmp
+          zip -r ATLAS_Index_Pro.zip ATLAS_Index_Pro/
+          echo "ZIP créé : $(du -sh ATLAS_Index_Pro.zip | cut -f1)"
+
+      - name: Upload vers plugins.qgis.org
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -u "${{ secrets.QGIS_USERNAME }}:${{ secrets.QGIS_PASSWORD }}" \
+            -F "package=@/tmp/ATLAS_Index_Pro.zip" \
+            https://plugins.qgis.org/plugins/api/v2/plugins/upload/)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "Réponse : $BODY"
+          echo "Code HTTP : $HTTP_CODE"
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "Erreur upload (code $HTTP_CODE)"
+            exit 1
+          fi
+          echo "Upload réussi !"
+
+      - name: Créer une Release GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/ATLAS_Index_Pro.zip
+          body: |
+            ## ATLAS Index Pro ${{ steps.version.outputs.VERSION }}
+
+            Voir [CHANGELOG.md](CHANGELOG.md) pour le détail des changements.
+
+            Plugin également disponible sur [plugins.qgis.org](https://plugins.qgis.org/plugins/ATLAS_Index_Pro/).
