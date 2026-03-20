@@ -484,7 +484,9 @@ class AtlasDialog(QDialog):
         self.grp_layer = QGroupBox()
         lay = QVBoxLayout()
         self.combo_layer = QgsMapLayerComboBox()
-        self.combo_layer.setFilters(QgsMapLayerProxyModel.LineLayer)
+        self.combo_layer.setFilters(
+            QgsMapLayerProxyModel.LineLayer | QgsMapLayerProxyModel.PointLayer
+        )
         self.combo_layer.layerChanged.connect(self._refresh_fields)
         lay.addWidget(self.combo_layer)
         self.grp_layer.setLayout(lay)

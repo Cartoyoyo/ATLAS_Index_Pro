@@ -3,7 +3,7 @@ name=ATLAS Index Pro
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
 description=Atlas sheet grid, geographic index and full PDF export (FR/EN/ES/PT/DE).
-version=2.0.1
+version=2.1.1
 author=Yoan Laloux
 email=y.laloux@vichy-communaute.fr
 about=FR: Plugin QGIS pour créer automatiquement une grille de feuillets (A4/A3, portrait/paysage,
@@ -14,7 +14,7 @@ about=FR: Plugin QGIS pour créer automatiquement une grille de feuillets (A4/A3
     multi-scale) from any vector layer, with geographic object index,
     overview map, full PDF export (cover page, index, overview, sheets, hyperlinks).
     Multilingual interface FR / EN / ES / PT / DE.
-homepage=https://github.com/Cartoyoyo
+homepage=https://github.com/Cartoyoyo/ATLAS_Index_Pro
 tracker=https://github.com/Cartoyoyo/ATLAS_Index_Pro/issues
 repository=https://github.com/Cartoyoyo/ATLAS_Index_Pro
 license=GNU GPL v3
@@ -24,7 +24,8 @@ experimental=False
 deprecated=False
 tags=atlas,grid,grille,index,print,impression,layout,mise en page,feuillets,sheets,pdf,overview
 category=Vector
-changelog=2.0.1 - Updated logo and icon
+changelog=2.1.1 - Support point and line layers in source layer selection
+    2.0.1 - Updated logo and icon
     2.0.0 - Renamed to ATLAS Index Pro
     Full PDF export (cover page, geographic index, overview map, atlas sheets, blank page)
     Hyperlinks from index references to atlas pages
