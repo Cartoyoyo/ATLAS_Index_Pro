@@ -24,28 +24,29 @@ jobs:
         run: |
           mkdir -p /tmp/ATLAS_Index_Pro
           cp -r . /tmp/ATLAS_Index_Pro/
-          # Exclure les fichiers inutiles
           rm -rf /tmp/ATLAS_Index_Pro/.git
           rm -rf /tmp/ATLAS_Index_Pro/.github
-          rm -f /tmp/ATLAS_Index_Pro/README.md
-          rm -f /tmp/ATLAS_Index_Pro/CHANGELOG.md
-          rm -f /tmp/ATLAS_Index_Pro/LICENSE
+          rm -rf /tmp/ATLAS_Index_Pro/__pycache__
+          rm -f /tmp/ATLAS_Index_Pro/.gitignore
+          rm -f /tmp/ATLAS_Index_Pro/.gitattributes
+          find /tmp/ATLAS_Index_Pro -name '*.pyc' -delete
           cd /tmp
           zip -r ATLAS_Index_Pro.zip ATLAS_Index_Pro/
           echo "ZIP créé : $(du -sh ATLAS_Index_Pro.zip | cut -f1)"
 
       - name: Upload vers plugins.qgis.org
+        continue-on-error: true
         run: |
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -u "${{ secrets.QGIS_USERNAME }}:${{ secrets.QGIS_PASSWORD }}" \
             -F "package=@/tmp/ATLAS_Index_Pro.zip" \
             https://plugins.qgis.org/plugins/api/v2/plugins/upload/)
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
           echo "Réponse : $BODY"
           echo "Code HTTP : $HTTP_CODE"
           if [ "$HTTP_CODE" != "201" ]; then
-            echo "Erreur upload (code $HTTP_CODE)"
+            echo "::warning::Upload QGIS échoué (code $HTTP_CODE) — vérifier les secrets QGIS_USERNAME/QGIS_PASSWORD"
             exit 1
           fi
           echo "Upload réussi !"
@@ -58,5 +59,3 @@ jobs:
             ## ATLAS Index Pro ${{ steps.version.outputs.VERSION }}
 
             Voir [CHANGELOG.md](CHANGELOG.md) pour le détail des changements.
-
-            Plugin également disponible sur [plugins.qgis.org](https://plugins.qgis.org/plugins/ATLAS_Index_Pro/).
