@@ -1,6 +1,6 @@
 # ATLAS Index Pro
 
-> Plugin QGIS · v3.0.0 · QGIS 3.16+ · Multilingue FR / EN / ES / PT / DE
+> Plugin QGIS · v3.0.1 · QGIS 3.16+ · Multilingue FR / EN / ES / PT / DE
 
 ---
 
