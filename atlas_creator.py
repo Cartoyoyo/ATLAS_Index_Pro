@@ -1,6 +1,7 @@
 from qgis.core import (
     QgsProject, QgsPrintLayout, QgsLayoutItemMap, QgsLayoutItemLabel,
-    QgsLayoutPoint, QgsLayoutSize, QgsUnitTypes, QgsTextFormat
+    QgsLayoutPoint, QgsLayoutSize, QgsUnitTypes, QgsTextFormat,
+    QgsCoordinateReferenceSystem
 )
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QFont, QColor
@@ -63,7 +64,9 @@ class AtlasCreator:
         layout.addLayoutItem(map_item)
 
         # Emprise initiale = 1ère cellule (nécessaire pour que setScale fonctionne)
-        first = next(self.grid_layer.getFeatures())
+        first = next(self.grid_layer.getFeatures(), None)
+        if first is None:
+            raise ValueError("Grid layer is empty — cannot create atlas layout.")
         map_item.setExtent(first.geometry().boundingBox())
 
         # ── Étiquette référence (bas droit, semi-transparente) ──
@@ -93,14 +96,23 @@ class AtlasCreator:
         atlas.setCoverageLayer(self.grid_layer)
         atlas.setPageNameExpression('"reference"')
 
-        # La carte suit l'atlas à échelle fixe
+        # La carte suit l'atlas
         map_item.setAtlasDriven(True)
-        map_item.setAtlasScalingMode(QgsLayoutItemMap.Fixed)
+
+        # SCR géographique (degrés) : ajuster à l'emprise de la cellule
+        # SCR projeté (mètres) : échelle fixe
+        crs = project.crs()
+        if crs.isGeographic():
+            map_item.setAtlasScalingMode(QgsLayoutItemMap.Auto)
+            map_item.setAtlasMargin(0.0)
+        else:
+            map_item.setAtlasScalingMode(QgsLayoutItemMap.Fixed)
 
         # Ajout au manager, rafraîchir, positionner, PUIS forcer l'échelle
         manager.addLayout(layout)
         atlas.updateFeatures()
         atlas.seekTo(0)
-        map_item.setScale(self.scale)
+        if not crs.isGeographic():
+            map_item.setScale(self.scale)
 
         return layout

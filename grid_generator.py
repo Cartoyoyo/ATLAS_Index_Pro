@@ -36,7 +36,7 @@ def row_to_letters(row_index):
     0->A, 1->B, ..., 25->Z, 26->AA, 27->AB, ...
     """
     result = ""
-    n = row_index + 1
+    n = max(0, row_index) + 1
     while n > 0:
         n -= 1
         result = chr(65 + n % 26) + result
@@ -54,7 +54,9 @@ class GridGenerator:
         self.scale = scale
         self.overlap_pct = overlap_pct
         self.margin_pct = margin_pct
-        self.extent_mode = extent_mode  # 0=all, 1=selected, 2=drawn
+        if scale <= 0:
+            raise ValueError(f"Scale must be > 0, got {scale}")
+        self.extent_mode = extent_mode  # 0=all, 1=map_extent, 2=drawn
         self.drawn_extent = drawn_extent
 
     def get_printable_size_mm(self):
@@ -64,12 +66,35 @@ class GridGenerator:
             w, h = h, w
         return w - 2 * LAYOUT_MARGIN_MM, h - 2 * LAYOUT_MARGIN_MM
 
-    def get_cell_size_meters(self):
-        """Convertit la taille imprimable en dimensions terrain (mètres)."""
+    def get_cell_size_crs_units(self):
+        """Convertit la taille imprimable en dimensions terrain (unités du SCR).
+
+        Si le SCR est géographique (degrés), convertit les mètres en degrés
+        en utilisant le centre de l'emprise de la couche comme référence.
+        """
         pw, ph = self.get_printable_size_mm()
-        cell_w = pw * self.scale / 1000.0
-        cell_h = ph * self.scale / 1000.0
-        return cell_w, cell_h
+        cell_w_m = pw * self.scale / 1000.0   # en mètres
+        cell_h_m = ph * self.scale / 1000.0
+
+        if not self.crs.isGeographic():
+            return cell_w_m, cell_h_m
+
+        # SCR géographique : convertir mètres → degrés
+        # 1 degré de latitude ≈ 111 320 m (constant)
+        # 1 degré de longitude ≈ 111 320 m × cos(latitude)
+        extent = self.layer.extent()
+        transform = QgsCoordinateTransform(
+            self.layer.crs(), self.crs, QgsProject.instance()
+        )
+        center = transform.transform(extent.center())
+        lat_rad = math.radians(center.y())
+
+        meters_per_deg_lat = 111320.0
+        meters_per_deg_lon = 111320.0 * math.cos(lat_rad)
+
+        cell_w_deg = cell_w_m / meters_per_deg_lon
+        cell_h_deg = cell_h_m / meters_per_deg_lat
+        return cell_w_deg, cell_h_deg
 
     def get_extent(self):
         """Calcule l'emprise de travail selon le mode choisi."""
@@ -81,15 +106,15 @@ class GridGenerator:
             extent = self.layer.extent()
             return transform_to_crs.transformBoundingBox(extent)
 
-        elif self.extent_mode == 1:  # Sélection uniquement
-            if self.layer.selectedFeatureCount() == 0:
-                extent = self.layer.extent()
-            else:
-                bbox = QgsRectangle()
-                bbox.setNull()
-                for feat in self.layer.selectedFeatures():
-                    bbox.combineExtentWith(feat.geometry().boundingBox())
-                extent = bbox
+        elif self.extent_mode == 1:  # Emprise de la carte
+            if self.drawn_extent:
+                canvas_crs = QgsProject.instance().crs()
+                transform = QgsCoordinateTransform(
+                    canvas_crs, self.crs, QgsProject.instance()
+                )
+                return transform.transformBoundingBox(self.drawn_extent)
+            # Fallback : emprise complète de la couche
+            extent = self.layer.extent()
             return transform_to_crs.transformBoundingBox(extent)
 
         elif self.extent_mode == 2:  # Zone dessinée
@@ -104,6 +129,16 @@ class GridGenerator:
             extent = self.layer.extent()
             return transform_to_crs.transformBoundingBox(extent)
 
+        elif self.extent_mode == 3:  # Lasso (sélection cumulative)
+            if self.layer.selectedFeatureCount() > 0:
+                bbox = QgsRectangle()
+                bbox.setNull()
+                for feat in self.layer.selectedFeatures():
+                    bbox.combineExtentWith(feat.geometry().boundingBox())
+                return transform_to_crs.transformBoundingBox(bbox)
+            extent = self.layer.extent()
+            return transform_to_crs.transformBoundingBox(extent)
+
     def _build_conduite_index(self):
         """
         Transforme les géométries des conduites dans le SCR de travail
@@ -113,7 +148,7 @@ class GridGenerator:
             self.layer.crs(), self.crs, QgsProject.instance()
         )
 
-        if self.extent_mode == 1 and self.layer.selectedFeatureCount() > 0:
+        if self.extent_mode == 3 and self.layer.selectedFeatureCount() > 0:
             features = self.layer.selectedFeatures()
         else:
             features = list(self.layer.getFeatures())
@@ -135,7 +170,9 @@ class GridGenerator:
     def generate(self, output_dir):
         """Génère la grille et la sauvegarde en GeoJSON. Retourne le QgsVectorLayer."""
         extent = self.get_extent()
-        cell_w, cell_h = self.get_cell_size_meters()
+        if extent is None or extent.isNull() or extent.isEmpty():
+            raise ValueError("Cannot generate grid: layer extent is empty or invalid.")
+        cell_w, cell_h = self.get_cell_size_crs_units()
 
         # Agrandir l'emprise selon la marge (% de la cellule)
         if self.margin_pct > 0:

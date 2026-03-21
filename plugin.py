@@ -24,5 +24,8 @@ class ATLASIndexProPlugin:
 
     def run(self):
         from .dialog import AtlasDialog
+        if self.dialog is not None:
+            self.dialog.close()
+            self.dialog.deleteLater()
         self.dialog = AtlasDialog(self.iface)
         self.dialog.show()

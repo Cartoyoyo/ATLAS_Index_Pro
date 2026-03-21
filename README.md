@@ -1,6 +1,6 @@
 # ATLAS Index Pro
 
-> Plugin QGIS · v2.0.0 · QGIS 3.16+ · Multilingue FR / EN / ES / PT / DE
+> Plugin QGIS · v3.0.0 · QGIS 3.16+ · Multilingue FR / EN / ES / PT / DE
 
 ---
 
@@ -183,6 +183,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 | Version | Notes |
 |---------|-------|
+| **3.0.0** | 24 corrections — Fusion PDF universelle sans dépendance externe — Optimisation performance — Titre colonne index dynamique — DPI 150 par défaut — Licence GPL v3 |
 | **2.0.0** | Renommé ATLAS Index Pro — Export PDF complet (garde, index, plan, feuillets) — Liens hypertexte — Plan d'ensemble — Interface 5 langues — Paramètre DPI |
 | **1.1.0** | Interface bilingue FR/EN — Généralisation à tout type d'objet vecteur — Index HTML paginé — Grille auto-stylisée — Paramètres avancés |
 | **1.0.0** | Version initiale |

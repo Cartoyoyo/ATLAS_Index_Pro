@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 from urllib.request import urlopen, Request
 from qgis.core import (
     QgsCoordinateTransform, QgsProject, QgsCoordinateReferenceSystem,
@@ -54,6 +55,11 @@ class Geocoder:
     # ---------------------------------------------------------------- field
     def _from_field(self):
         result = {}
+        if self.field_name and self.layer.fields().indexOf(self.field_name) == -1:
+            logging.getLogger('ATLAS_Index_Pro').warning(
+                f"Field '{self.field_name}' not found in layer '{self.layer.name()}'"
+            )
+            return {feat.id(): "Inconnue" for feat in self.layer.getFeatures()}
         for feat in self.layer.getFeatures():
             val = feat[self.field_name] if self.field_name else None
             result[feat.id()] = str(val).strip() if val and str(val).strip() else "Inconnue"
@@ -88,7 +94,8 @@ class Geocoder:
                 }
             )
             data = json.loads(urlopen(req, timeout=35).read().decode('utf-8'))
-        except Exception:
+        except Exception as e:
+            logging.getLogger('ATLAS_Index_Pro').warning(f"OSM Overpass request failed: {e}")
             return []
 
         roads = []
@@ -180,8 +187,9 @@ class Geocoder:
                 fid = int(row['fid'])
                 name = (row.get('result_name') or row.get('result_label') or '').strip()
                 result[fid] = name if name else "Inconnue"
-        except Exception:
+        except Exception as e:
             # Si le batch échoue, tout est "Inconnue" → le fallback OSM prendra le relais
+            logging.getLogger('ATLAS_Index_Pro').warning(f"BAN reverse CSV batch failed: {e}")
             for fid, _, _ in rows:
                 result[fid] = "Inconnue"
 

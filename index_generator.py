@@ -36,18 +36,21 @@ class IndexGenerator:
     """Génère l'index HTML des objets par feuillet, formaté pour impression."""
 
     def __init__(self, conduite_layer, grid_layer, street_names, crs,
-                 format_name='A4', orientation='paysage'):
+                 format_name='A4', orientation='paysage',
+                 column_title=None):
         self.conduite_layer = conduite_layer
         self.grid_layer = grid_layer
         self.street_names = street_names
         self.crs = crs
         self.format_name = format_name
         self.orientation = orientation
+        self.column_title = column_title or 'Nom de rue'
 
     def generate(self, output_dir):
         index = self._build_index()
         sorted_index = self._sort_index(index)
         html = self._render_html(sorted_index)
+        os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, 'index_objets.html')
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
@@ -65,10 +68,11 @@ class IndexGenerator:
         grid_index = QgsSpatialIndex()
         grid_geoms = {}
         grid_refs = {}
+        has_ref_field = self.grid_layer.fields().indexOf('reference') != -1
         for gf in self.grid_layer.getFeatures():
             gid = gf.id()
             grid_geoms[gid] = QgsGeometry(gf.geometry())
-            grid_refs[gid] = gf['reference']
+            grid_refs[gid] = gf['reference'] if has_ref_field else f"F{gid}"
             grid_index.addFeature(gf)
 
         index = {}
@@ -127,7 +131,8 @@ class IndexGenerator:
                 r_name, r_refs = right[i] if i < len(right) else ('', [])
 
                 def esc(s):
-                    return s.replace('&', '&amp;').replace('<', '&lt;')
+                    return (s.replace('&', '&amp;').replace('<', '&lt;')
+                             .replace('>', '&gt;').replace('"', '&quot;'))
 
                 rows_html += (
                     f'<tr>'
@@ -145,16 +150,16 @@ class IndexGenerator:
             pages_html += f'''
         <div class="page" style="{page_break}">
             <div class="page-header">
-                <span class="title">Index des objets</span>
+                <span class="title">Index — {self.column_title}</span>
                 <span class="page-num">Page {page_num + 1} / {total_pages}</span>
             </div>
             <table class="index-table">
                 <thead>
                     <tr>
-                        <th>Nom de rue</th>
+                        <th>{self.column_title}</th>
                         <th>Feuillets</th>
                         <th class="divider"></th>
-                        <th>Nom de rue</th>
+                        <th>{self.column_title}</th>
                         <th>Feuillets</th>
                     </tr>
                 </thead>

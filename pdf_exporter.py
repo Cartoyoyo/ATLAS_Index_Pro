@@ -65,7 +65,8 @@ class PdfExporter:
 
     def __init__(self, layout, grid_layer, index_data, output_dir,
                  title, format_name, orientation, scale, dpi, lang,
-                 progress_callback=None, log_callback=None):
+                 progress_callback=None, log_callback=None,
+                 column_title=None):
         self.layout = layout
         self.grid_layer = grid_layer
         self.index_data = index_data          # {street: [refs]} ou None
@@ -78,10 +79,14 @@ class PdfExporter:
         self.lang = lang
         self.progress_cb = progress_callback
         self.log_cb = log_callback
+        self.column_title = column_title or self._tr('idx_street')
         self._tmp_files = []
 
     def _tr(self, key):
-        return _TR[key][self.lang]
+        entry = _TR.get(key)
+        if not entry:
+            return key
+        return entry.get(self.lang, entry.get('en', key))
 
     # ---------------------------------------------------------------- sizes
     def _page_size_mm(self):
@@ -109,7 +114,11 @@ class PdfExporter:
 
     # ---------------------------------------------------------------- atlas refs in order
     def _atlas_ref_order(self):
-        """Retourne la liste ordonnée des références atlas (ordre des feuillets)."""
+        """Retourne la liste ordonnée des références atlas (ordre des feuillets).
+        Utilise le cache si déjà calculé (évite double itération).
+        """
+        if hasattr(self, '_cached_refs'):
+            return self._cached_refs
         atlas = self.layout.atlas()
         atlas.updateFeatures()
         refs = []
@@ -118,6 +127,7 @@ class PdfExporter:
             feat = atlas.coverageLayer().getFeature(atlas.currentFeatureNumber())
             ref = feat['reference'] if feat.isValid() else f"P{i+1}"
             refs.append(ref)
+        self._cached_refs = refs
         return refs
 
     # ---------------------------------------------------------------- cover
@@ -243,9 +253,9 @@ class PdfExporter:
         th_style = f'padding:{pad+15}px 60px; text-align:left; font-size:{head_pt}pt;'
         header = (
             f'<tr style="background:#2c3e50; color:#fff;">'
-            f'<th style="{th_style}">{self._tr("idx_street")}</th>'
+            f'<th style="{th_style}">{self._esc(self.column_title)}</th>'
             f'<th style="{th_style}">{self._tr("idx_sheets")}</th>'
-            f'<th style="{th_style} {sep} border-color:#fff;">{self._tr("idx_street")}</th>'
+            f'<th style="{th_style} {sep} border-color:#fff;">{self._esc(self.column_title)}</th>'
             f'<th style="{th_style}">{self._tr("idx_sheets")}</th>'
             f'</tr>'
         )
@@ -317,8 +327,11 @@ class PdfExporter:
 
         # Emprise = grille entière, ajustée au ratio du cadre carte
         extent = self.grid_layer.extent()
+        if extent.isNull() or extent.isEmpty():
+            del layout
+            return path
         # Ratio du cadre carte sur la page
-        map_ratio = map_w / map_h
+        map_ratio = map_w / map_h if map_h > 0 else 1.0
         # Ratio de l'emprise géographique
         ext_ratio = extent.width() / extent.height() if extent.height() > 0 else 1.0
 
@@ -400,56 +413,57 @@ class PdfExporter:
         self.grid_layer.setLabelsEnabled(True)
         self.grid_layer.triggerRepaint()
 
-        # ── Titre (taille proportionnelle à la page) ──
-        # ~4.7% de la hauteur de page → ~14pt pour A4 portrait, ~20pt pour A3
-        title_pt = max(8, int(h_mm * 0.047))
-        title_label = QgsLayoutItemLabel(layout)
-        title_label.setText(self._tr('overview'))
-        title_fmt = QgsTextFormat()
-        title_fmt.setFont(QFont('Arial', title_pt, QFont.Bold))
-        title_fmt.setColor(QColor(44, 62, 80))
-        title_label.setTextFormat(title_fmt)
-        title_label.attemptMove(QgsLayoutPoint(
-            margin, margin, QgsUnitTypes.LayoutMillimeters
-        ))
-        title_label.attemptResize(QgsLayoutSize(
-            map_w, header_h, QgsUnitTypes.LayoutMillimeters
-        ))
-        title_label.setHAlign(Qt.AlignCenter)
-        title_label.setVAlign(Qt.AlignVCenter)
-        layout.addLayoutItem(title_label)
+        try:
+            # ── Titre (taille proportionnelle à la page) ──
+            # ~4.7% de la hauteur de page → ~14pt pour A4 portrait, ~20pt pour A3
+            title_pt = max(8, int(h_mm * 0.047))
+            title_label = QgsLayoutItemLabel(layout)
+            title_label.setText(self._tr('overview'))
+            title_fmt = QgsTextFormat()
+            title_fmt.setFont(QFont('Arial', title_pt, QFont.Bold))
+            title_fmt.setColor(QColor(44, 62, 80))
+            title_label.setTextFormat(title_fmt)
+            title_label.attemptMove(QgsLayoutPoint(
+                margin, margin, QgsUnitTypes.LayoutMillimeters
+            ))
+            title_label.attemptResize(QgsLayoutSize(
+                map_w, header_h, QgsUnitTypes.LayoutMillimeters
+            ))
+            title_label.setHAlign(Qt.AlignCenter)
+            title_label.setVAlign(Qt.AlignVCenter)
+            layout.addLayoutItem(title_label)
 
-        # ── Barre d'échelle (taille proportionnelle) ──
-        scalebar_h = max(2, ref_dim * 0.012)
-        scalebar_font = max(5, int(ref_dim * 0.033))
-        scalebar = QgsLayoutItemScaleBar(layout)
-        scalebar.setLinkedMap(map_item)
-        scalebar.setStyle('Single Box')
-        scalebar.setUnits(QgsUnitTypes.DistanceMeters)
-        scalebar.setNumberOfSegments(4)
-        scalebar.setNumberOfSegmentsLeft(0)
-        scalebar.setHeight(scalebar_h)
-        sb_fmt = QgsTextFormat()
-        sb_fmt.setFont(QFont('Arial', scalebar_font))
-        scalebar.setTextFormat(sb_fmt)
-        scalebar.attemptMove(QgsLayoutPoint(
-            margin, h_mm - margin - footer_h,
-            QgsUnitTypes.LayoutMillimeters
-        ))
-        layout.addLayoutItem(scalebar)
+            # ── Barre d'échelle (taille proportionnelle) ──
+            scalebar_h = max(2, ref_dim * 0.012)
+            scalebar_font = max(5, int(ref_dim * 0.033))
+            scalebar = QgsLayoutItemScaleBar(layout)
+            scalebar.setLinkedMap(map_item)
+            scalebar.setStyle('Single Box')
+            scalebar.setUnits(QgsUnitTypes.DistanceMeters)
+            scalebar.setNumberOfSegments(4)
+            scalebar.setNumberOfSegmentsLeft(0)
+            scalebar.setHeight(scalebar_h)
+            sb_fmt = QgsTextFormat()
+            sb_fmt.setFont(QFont('Arial', scalebar_font))
+            scalebar.setTextFormat(sb_fmt)
+            scalebar.attemptMove(QgsLayoutPoint(
+                margin, h_mm - margin - footer_h,
+                QgsUnitTypes.LayoutMillimeters
+            ))
+            layout.addLayoutItem(scalebar)
 
-        # ── Export PDF ──
-        exporter = QgsLayoutExporter(layout)
-        settings = QgsLayoutExporter.PdfExportSettings()
-        settings.dpi = self.dpi
-        exporter.exportToPdf(path, settings)
-
-        # Restaurer l'étiquetage original
-        if old_labeling:
-            self.grid_layer.setLabeling(old_labeling)
-        else:
-            self.grid_layer.setLabelsEnabled(old_labels_enabled)
-        self.grid_layer.triggerRepaint()
+            # ── Export PDF ──
+            exporter = QgsLayoutExporter(layout)
+            settings = QgsLayoutExporter.PdfExportSettings()
+            settings.dpi = self.dpi
+            exporter.exportToPdf(path, settings)
+        finally:
+            # Restaurer l'étiquetage original (même en cas d'erreur)
+            if old_labeling:
+                self.grid_layer.setLabeling(old_labeling)
+            else:
+                self.grid_layer.setLabelsEnabled(old_labels_enabled)
+            self.grid_layer.triggerRepaint()
 
         del layout
         return path
@@ -469,39 +483,182 @@ class PdfExporter:
         atlas.updateFeatures()
         count = atlas.count()
         pdfs = []
+        refs = []
 
         exporter = QgsLayoutExporter(self.layout)
         settings = QgsLayoutExporter.PdfExportSettings()
         settings.dpi = self.dpi
+        # Optimisations de rendu
+        try:
+            settings.flags |= QgsLayoutExporter.FlagSimplifyGeometries
+        except (AttributeError, TypeError):
+            pass
+        try:
+            settings.rasterizeWholeImage = True
+        except AttributeError:
+            pass
+
+        # Throttle : log + processEvents tous les LOG_EVERY feuillets
+        log_every = max(1, count // 20) if count > 10 else 1
 
         for i in range(count):
             atlas.seekTo(i)
             path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
             self._tmp_files.append(path)
-            self._log(f"Feuillet {i+1}/{count}", path)
+
+            # Collecter les refs au passage (évite _atlas_ref_order séparé)
+            feat = atlas.coverageLayer().getFeature(atlas.currentFeatureNumber())
+            refs.append(feat['reference'] if feat.isValid() else f"P{i+1}")
 
             result = exporter.exportToPdf(path, settings)
             if result == QgsLayoutExporter.Success:
                 pdfs.append(path)
 
-            self._progress(75 + int(20 * (i + 1) / count))
-            QApplication.processEvents()
+            # UI feedback throttlé
+            if i % log_every == 0 or i == count - 1:
+                self._log(f"Feuillet {i+1}/{count}", path)
+                self._progress(75 + int(20 * (i + 1) / count))
+                QApplication.processEvents()
 
+        # Mettre en cache les refs pour éviter un 2e pass
+        self._cached_refs = refs
         return pdfs
 
     # ---------------------------------------------------------------- merge
     def _merge_pdfs(self, pdf_list, output_path, ref_page_map=None):
-        """Fusionne les PDF. Tente pypdf puis PyPDF2."""
+        """Fusionne les PDF. Tente pypdf, PyPDF2, puis fallback pur Python."""
         try:
             return self._merge_pypdf(pdf_list, output_path, ref_page_map)
-        except ImportError:
+        except (ImportError, Exception):
             pass
         try:
             return self._merge_pypdf2(pdf_list, output_path, ref_page_map)
-        except ImportError:
+        except (ImportError, Exception):
             pass
-        # Fallback : pas de fusion possible
-        return None
+        # Fallback pur Python — zéro dépendance, fonctionne partout
+        return self._merge_native(pdf_list, output_path)
+
+    def _merge_native(self, pdf_list, output_path):
+        """Fusion PDF en pur Python — zéro dépendance externe.
+        Concatène les pages en réécrivant les objets PDF avec xref valide.
+        Pas de signets, mais produit un PDF lisible par tout lecteur.
+        """
+        import re
+
+        all_objects = []   # (new_num, body_bytes)
+        page_nums = []     # new_num des objets /Type /Page
+        next_num = 1
+
+        for pdf_path in pdf_list:
+            if not os.path.exists(pdf_path):
+                continue
+            with open(pdf_path, 'rb') as f:
+                data = f.read()
+
+            # Extraire chaque objet : "N 0 obj ... endobj"
+            objects = []
+            for m in re.finditer(rb'(\d+)\s+0\s+obj\b', data):
+                obj_num = int(m.group(1))
+                body_start = m.end()
+                end_m = re.search(rb'\bendobj\b', data[body_start:])
+                if not end_m:
+                    continue
+                body = data[body_start:body_start + end_m.start()]
+                objects.append((obj_num, body))
+
+            if not objects:
+                continue
+
+            # Table de renumérotation
+            obj_map = {}
+            for old_num, _ in objects:
+                obj_map[old_num] = next_num
+                next_num += 1
+
+            def _renum_ref(match, _map=obj_map):
+                ref = int(match.group(1))
+                return f'{_map.get(ref, ref)} 0 R'.encode()
+
+            for old_num, body in objects:
+                new_num = obj_map[old_num]
+
+                # Ignorer les objets Pages, Catalog et XRef sources
+                if re.search(rb'/Type\s*/Pages\b', body):
+                    continue
+                if re.search(rb'/Type\s*/Catalog\b', body):
+                    continue
+                if re.search(rb'/Type\s*/XRef\b', body):
+                    continue
+
+                # Renuméroter les références "N 0 R" SEULEMENT
+                # dans la partie dictionnaire (avant stream)
+                stream_m = re.search(rb'\bstream\r?\n', body)
+                if stream_m:
+                    dict_part = body[:stream_m.start()]
+                    stream_part = body[stream_m.start():]
+                    dict_part = re.sub(rb'(\d+)\s+0\s+R\b', _renum_ref, dict_part)
+                    body = dict_part + stream_part
+                else:
+                    body = re.sub(rb'(\d+)\s+0\s+R\b', _renum_ref, body)
+
+                # Détecter les pages
+                is_page = bool(re.search(rb'/Type\s*/Page\b(?!s)', body))
+                if is_page:
+                    page_nums.append(new_num)
+
+                all_objects.append((new_num, body))
+
+        if not page_nums:
+            return None
+
+        # Construire le PDF de sortie avec xref valide
+        out = bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
+        xref_offsets = {}
+
+        # Écrire tous les objets (avec /Parent corrigé vers notre Pages)
+        pages_num = next_num
+        parent_repl = f'/Parent {pages_num} 0 R'.encode()
+
+        for num, body in all_objects:
+            # Réécrire /Parent pour pointer vers notre nouvel objet Pages
+            if num in page_nums:
+                body = re.sub(rb'/Parent\s+\d+\s+0\s+R', parent_repl, body)
+            xref_offsets[num] = len(out)
+            out += f'{num} 0 obj'.encode() + body + b'endobj\n'
+
+        # Objet Pages (arbre de pages unique)
+        kids = ' '.join(f'{n} 0 R' for n in page_nums)
+        xref_offsets[pages_num] = len(out)
+        out += (f'{pages_num} 0 obj\n'
+                f'<< /Type /Pages /Kids [{kids}] /Count {len(page_nums)} >>\n'
+                f'endobj\n').encode()
+
+        # Objet Catalog
+        catalog_num = pages_num + 1
+        xref_offsets[catalog_num] = len(out)
+        out += (f'{catalog_num} 0 obj\n'
+                f'<< /Type /Catalog /Pages {pages_num} 0 R >>\n'
+                f'endobj\n').encode()
+
+        # Table xref complète
+        max_obj = catalog_num
+        xref_start = len(out)
+        out += f'xref\n0 {max_obj + 1}\n'.encode()
+        out += b'0000000000 65535 f \r\n'
+        for i in range(1, max_obj + 1):
+            if i in xref_offsets:
+                out += f'{xref_offsets[i]:010d} 00000 n \r\n'.encode()
+            else:
+                out += b'0000000000 00000 f \r\n'
+
+        # Trailer
+        out += (f'trailer\n<< /Size {max_obj + 1} /Root {catalog_num} 0 R >>\n'
+                f'startxref\n{xref_start}\n%%EOF\n').encode()
+
+        with open(output_path, 'wb') as f:
+            f.write(bytes(out))
+
+        return output_path
 
     def _merge_pypdf(self, pdf_list, output_path, ref_page_map):
         from pypdf import PdfWriter, PdfReader
@@ -515,22 +672,19 @@ class PdfExporter:
 
         # Ajouter des signets (bookmarks) navigables dans le panneau PDF
         if ref_page_map:
-            # Sections principales
-            cover_bm = writer.add_outline_item(
-                self._tr('cover_format'), 0)  # page de garde
+            writer.add_outline_item(
+                self._tr('cover_format'), 0)
 
             idx_start = 1
             if self.index_data:
                 writer.add_outline_item(
                     self._tr('idx_title'), idx_start)
 
-            # Plan d'ensemble : juste avant les feuillets atlas
             overview_page = min(ref_page_map.values()) - 1 if ref_page_map else 1
             if overview_page >= 0 and overview_page < len(writer.pages):
                 writer.add_outline_item(
                     self._tr('overview'), overview_page)
 
-            # Signets pour chaque feuillet atlas
             atlas_parent = writer.add_outline_item(
                 self._tr('idx_sheets'), min(ref_page_map.values()))
             for ref, page_idx in ref_page_map.items():
@@ -552,7 +706,6 @@ class PdfExporter:
         for pdf_path in pdf_list:
             merger.append(pdf_path)
 
-        # Signets navigables
         if ref_page_map:
             try:
                 merger.add_outline_item(self._tr('cover_format'), 0)
@@ -581,6 +734,9 @@ class PdfExporter:
           4. Feuillets atlas
           5. Page blanche
         """
+        # Vérifier que le répertoire de sortie existe
+        if not os.path.isdir(self.output_dir):
+            raise FileNotFoundError(f"Output directory does not exist: {self.output_dir}")
         w_mm, h_mm = self._page_size_mm()
 
         # 1) Références atlas dans l'ordre
@@ -616,7 +772,7 @@ class PdfExporter:
         overview_pdf = self._generate_overview(w_mm, h_mm)
         self._progress(76)
 
-        # 5) Pages atlas
+        # 5) Pages atlas (le plus long — optimisé avec throttle + simplify)
         atlas_pdfs = self._export_atlas_pages()
 
         # 6) Page blanche
@@ -636,7 +792,7 @@ class PdfExporter:
         output_path = os.path.join(self.output_dir, 'atlas_complet.pdf')
         merged = self._merge_pdfs(all_pdfs, output_path, ref_page_map)
 
-        # Nettoyage des fichiers temporaires
+        # Nettoyage des fichiers temporaires seulement si le merge a réussi
         if merged:
             for p in self._tmp_files:
                 try:
@@ -644,6 +800,8 @@ class PdfExporter:
                         os.remove(p)
                 except OSError:
                     pass
+        else:
+            self._log("Fusion impossible — fichiers PDF séparés conservés.")
 
         self._progress(100)
         return merged or self.output_dir

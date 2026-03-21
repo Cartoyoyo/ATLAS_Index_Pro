@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [3.0.0] - 2026-03-21
+
+### Added
+- **Universal PDF merge**: pure Python merger with no external dependency (pypdf/PyPDF2 optional). Works on any QGIS installation.
+- **Dynamic index column title**: when using an existing field instead of geocoding, the column header reflects the field name.
+- **24 bug fixes**: input validation, signal management, encoding, extent checks, HTML escaping, temp file cleanup, CRS validation, and more (see CORRECTIONS.md).
+
+### Changed
+- Default DPI reduced from 300 to 150 for faster exports.
+- License corrected to **GNU GPL v3** (About dialog, metadata, skill).
+- About dialog simplified: author with mailto link, no organization name.
+- Layout designer no longer opens automatically after export.
+- Folder explorer stays in foreground when user clicks "Open folder".
+- PDF export optimized: throttled UI updates, geometry simplification flags.
+- Deprecated `setFilters()` replaced with `setLayerFilter()` (QGIS 3.x compat).
+
+---
+
 ## [2.0.0] - 2026-03-16
 
 ### Added

@@ -1,13 +1,15 @@
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QRadioButton, QPushButton, QSpinBox, QDoubleSpinBox,
     QProgressBar, QFileDialog, QLineEdit, QButtonGroup, QMessageBox,
-    QDialogButtonBox, QApplication, QFormLayout, QFrame, QWidget, QCheckBox
+    QDialogButtonBox, QApplication, QFormLayout, QFrame, QWidget, QCheckBox,
+    QScrollArea, QStackedWidget
 )
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import Qt, QTimer, QEventLoop
 from qgis.PyQt.QtGui import QFont, QIcon
 from qgis.gui import QgsMapLayerComboBox
 from qgis.core import (
@@ -74,9 +76,9 @@ TR = {
         'es': "Todos los objetos",           'pt': "Todos os objetos",
         'de': "Alle Objekte"},
     'radio_sel': {
-        'fr': "Objets sélectionnés uniquement",  'en': "Selected objects only",
-        'es': "Solo objetos seleccionados",      'pt': "Apenas objetos selecionados",
-        'de': "Nur ausgewählte Objekte"},
+        'fr': "Emprise de la carte",          'en': "Current map extent",
+        'es': "Extensión del mapa actual",    'pt': "Extensão do mapa atual",
+        'de': "Aktuelle Kartenausdehnung"},
     'radio_draw': {
         'fr': "Zone dessinée sur la carte",  'en': "Drawn area on map",
         'es': "Zona dibujada en el mapa",    'pt': "Zona desenhada no mapa",
@@ -309,6 +311,16 @@ TR = {
     'btn_about': {
         'fr': "À propos",  'en': "About",
         'es': "Acerca de", 'pt': "Sobre",  'de': "Über"},
+    'btn_next': {
+        'fr': "Suivant  ▸",  'en': "Next  ▸",
+        'es': "Siguiente  ▸",  'pt': "Seguinte  ▸",  'de': "Weiter  ▸"},
+    'btn_prev': {
+        'fr': "◂  Précédent",  'en': "◂  Previous",
+        'es': "◂  Anterior",   'pt': "◂  Anterior",  'de': "◂  Zurück"},
+    'step_label': {
+        'fr': "Étape {cur} / {total}",  'en': "Step {cur} / {total}",
+        'es': "Paso {cur} / {total}",   'pt': "Passo {cur} / {total}",
+        'de': "Schritt {cur} / {total}"},
 }
 
 
@@ -382,7 +394,7 @@ class AboutDialog(QDialog):
         layout.addWidget(lbl_name)
 
         # Version
-        lbl_version = QLabel("Version 2.0.0")
+        lbl_version = QLabel("Version 3.0.0")
         lbl_version.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_version)
 
@@ -393,14 +405,17 @@ class AboutDialog(QDialog):
         layout.addWidget(sep)
 
         # Author
-        lbl_author = QLabel("Yoan Laloux — Vichy Communauté\ny.laloux@vichy-communaute.fr")
+        lbl_author = QLabel(
+            '<a href="mailto:y.laloux@vichy-communaute.fr">Yoan Laloux</a>'
+        )
+        lbl_author.setOpenExternalLinks(True)
         lbl_author.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_author)
 
         # License
         lbl_license = QLabel(
-            '<a href="https://www.gnu.org/licenses/old-licenses/gpl-2.0.html">'
-            'GNU General Public License v2.0</a>'
+            '<a href="https://www.gnu.org/licenses/gpl-3.0.html">'
+            'GNU General Public License v3.0</a>'
         )
         lbl_license.setOpenExternalLinks(True)
         lbl_license.setAlignment(Qt.AlignCenter)
@@ -436,7 +451,7 @@ class AtlasDialog(QDialog):
         self.lang = 'fr'
         self.overlap_pct = 0.0
         self.margin_pct = 10.0
-        self.dpi = 300
+        self.dpi = 150
         self._title_user_edited = False
 
         self.setMinimumWidth(520)
@@ -452,8 +467,10 @@ class AtlasDialog(QDialog):
         log_path = os.path.join(os.path.dirname(__file__), 'atlas_log.txt')
         self._logger = logging.getLogger('ATLAS_Index_Pro')
         self._logger.setLevel(logging.DEBUG)
-        # Supprimer les handlers précédents (rechargement plugin)
-        self._logger.handlers.clear()
+        # Fermer et supprimer les handlers précédents (rechargement plugin)
+        for h in self._logger.handlers[:]:
+            h.close()
+            self._logger.removeHandler(h)
         fh = logging.FileHandler(log_path, mode='w', encoding='utf-8')
         fh.setFormatter(logging.Formatter('%(asctime)s  %(message)s', datefmt='%H:%M:%S'))
         self._logger.addHandler(fh)
@@ -471,26 +488,42 @@ class AtlasDialog(QDialog):
             self.lbl_status.setText(f"{msg}  ·  📄 {fname}")
         else:
             self.lbl_status.setText(msg)
-        QApplication.processEvents()
+        QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def tr(self, key):
-        return TR[key][self.lang]
+        entry = TR.get(key)
+        if not entry:
+            return key
+        return entry.get(self.lang, entry.get('en', key))
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        main = QVBoxLayout()
+        outer = QVBoxLayout()
+
+        # ── QStackedWidget : 3 pages ──
+        self.stack = QStackedWidget()
+
+        # ════════════════════════════════════════════════════════════
+        #  PAGE 1 : Source, Format, Échelle, Emprise
+        # ════════════════════════════════════════════════════════════
+        page1 = QWidget()
+        p1 = QVBoxLayout(page1)
 
         # --- Couche source ---
         self.grp_layer = QGroupBox()
         lay = QVBoxLayout()
         self.combo_layer = QgsMapLayerComboBox()
-        self.combo_layer.setFilters(
+        import warnings
+        _layer_filter = (
             QgsMapLayerProxyModel.LineLayer | QgsMapLayerProxyModel.PointLayer
         )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            self.combo_layer.setFilters(_layer_filter)
         self.combo_layer.layerChanged.connect(self._refresh_fields)
         lay.addWidget(self.combo_layer)
         self.grp_layer.setLayout(lay)
-        main.addWidget(self.grp_layer)
+        p1.addWidget(self.grp_layer)
 
         # --- Format / Échelle ---
         self.grp_format = QGroupBox()
@@ -558,7 +591,7 @@ class AtlasDialog(QDialog):
         form.addRow(self.lbl_custom, self.spin_custom)
 
         self.grp_format.setLayout(form)
-        main.addWidget(self.grp_format)
+        p1.addWidget(self.grp_format)
 
         # --- Emprise ---
         self.grp_extent = QGroupBox()
@@ -603,9 +636,17 @@ class AtlasDialog(QDialog):
         self.radio_lasso.toggled.connect(self.btn_lasso.setEnabled)
 
         self.grp_extent.setLayout(lay)
-        main.addWidget(self.grp_extent)
+        p1.addWidget(self.grp_extent)
 
-        # --- Index géographique ---
+        p1.addStretch()
+        self.stack.addWidget(page1)
+
+        # ════════════════════════════════════════════════════════════
+        #  PAGE 2 : Index géographique
+        # ════════════════════════════════════════════════════════════
+        page2 = QWidget()
+        p2 = QVBoxLayout(page2)
+
         self.chk_index = QCheckBox()
         self.chk_index.setChecked(False)
         self.chk_index.setStyleSheet("""
@@ -629,47 +670,7 @@ class AtlasDialog(QDialog):
                 height: 20px;
             }
         """)
-        self.chk_index.toggled.connect(self._on_index_toggled)
-        main.addWidget(self.chk_index)
-
-        # --- Export PDF ---
-        self.chk_pdf = QCheckBox()
-        self.chk_pdf.setChecked(False)
-        self.chk_pdf.setStyleSheet("""
-            QCheckBox {
-                spacing: 10px;
-                font-size: 10pt;
-                font-weight: bold;
-                color: #2c3e50;
-                padding: 8px 12px;
-                background: #eaf2f8;
-                border: 1px solid #aed6f1;
-                border-radius: 6px;
-            }
-            QCheckBox:checked {
-                background: #d5f5e3;
-                border-color: #82e0aa;
-                color: #1e8449;
-            }
-            QCheckBox::indicator {
-                width: 20px;
-                height: 20px;
-            }
-        """)
-        self.chk_pdf.toggled.connect(self._on_pdf_toggled)
-        main.addWidget(self.chk_pdf)
-
-        # Titre PDF
-        self.grp_pdf_title = QGroupBox()
-        row = QHBoxLayout()
-        self.lbl_pdf_title = QLabel()
-        row.addWidget(self.lbl_pdf_title)
-        self.txt_pdf_title = QLineEdit()
-        self.txt_pdf_title.textEdited.connect(self._on_title_edited)
-        row.addWidget(self.txt_pdf_title)
-        self.grp_pdf_title.setLayout(row)
-        self.grp_pdf_title.setVisible(False)
-        main.addWidget(self.grp_pdf_title)
+        p2.addWidget(self.chk_index)
 
         # --- Adresse objet ---
         self.grp_field = QGroupBox()
@@ -699,10 +700,54 @@ class AtlasDialog(QDialog):
         )
 
         self.grp_field.setLayout(lay)
-        main.addWidget(self.grp_field)
+        self.grp_field.setEnabled(False)
+        p2.addWidget(self.grp_field)
 
-        self._refresh_fields()
-        self.grp_field.setVisible(False)
+        p2.addStretch()
+        self.stack.addWidget(page2)
+
+        # ════════════════════════════════════════════════════════════
+        #  PAGE 3 : Export PDF + Répertoire de sortie
+        # ════════════════════════════════════════════════════════════
+        page3 = QWidget()
+        p3 = QVBoxLayout(page3)
+
+        self.chk_pdf = QCheckBox()
+        self.chk_pdf.setChecked(False)
+        self.chk_pdf.setStyleSheet("""
+            QCheckBox {
+                spacing: 10px;
+                font-size: 10pt;
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 8px 12px;
+                background: #eaf2f8;
+                border: 1px solid #aed6f1;
+                border-radius: 6px;
+            }
+            QCheckBox:checked {
+                background: #d5f5e3;
+                border-color: #82e0aa;
+                color: #1e8449;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+            }
+        """)
+        p3.addWidget(self.chk_pdf)
+
+        # Titre PDF
+        self.grp_pdf_title = QGroupBox()
+        row = QHBoxLayout()
+        self.lbl_pdf_title = QLabel()
+        row.addWidget(self.lbl_pdf_title)
+        self.txt_pdf_title = QLineEdit()
+        self.txt_pdf_title.textEdited.connect(self._on_title_edited)
+        row.addWidget(self.txt_pdf_title)
+        self.grp_pdf_title.setLayout(row)
+        self.grp_pdf_title.setEnabled(False)
+        p3.addWidget(self.grp_pdf_title)
 
         # --- Répertoire de sortie ---
         self.grp_output = QGroupBox()
@@ -714,7 +759,61 @@ class AtlasDialog(QDialog):
         row.addWidget(self.btn_browse)
         self.grp_output.setLayout(row)
         self.grp_output.setVisible(False)
-        main.addWidget(self.grp_output)
+        p3.addWidget(self.grp_output)
+
+        p3.addStretch()
+        self.stack.addWidget(page3)
+
+        # Initialiser après construction complète des 3 pages
+        self._refresh_fields()
+        self.chk_index.toggled.connect(self._on_index_toggled)
+        self.chk_pdf.toggled.connect(self._on_pdf_toggled)
+        self.stack.setCurrentIndex(0)
+
+        # ── Ajouter le stack au layout principal ──
+        outer.addWidget(self.stack, 1)
+
+        # ── Navigation : Précédent / étape / Suivant ──
+        nav_row = QHBoxLayout()
+
+        self.btn_prev = QPushButton()
+        self.btn_prev.setFixedHeight(32)
+        self.btn_prev.setStyleSheet(
+            "QPushButton{background:#3498db;color:#fff;padding:6px 18px;"
+            "border-radius:5px;font-weight:bold}"
+            "QPushButton:hover{background:#2980b9}"
+            "QPushButton:disabled{background:#bdc3c7;color:#7f8c8d}"
+        )
+        self.btn_prev.clicked.connect(self._prev_page)
+        nav_row.addWidget(self.btn_prev)
+
+        nav_row.addStretch()
+
+        self.lbl_step = QLabel()
+        self.lbl_step.setStyleSheet(
+            "font-size:9pt;font-weight:bold;color:#7f8c8d;"
+        )
+        nav_row.addWidget(self.lbl_step)
+
+        nav_row.addStretch()
+
+        self.btn_next = QPushButton()
+        self.btn_next.setFixedHeight(32)
+        self.btn_next.setStyleSheet(
+            "QPushButton{background:#3498db;color:#fff;padding:6px 18px;"
+            "border-radius:5px;font-weight:bold}"
+            "QPushButton:hover{background:#2980b9}"
+        )
+        self.btn_next.clicked.connect(self._next_page)
+        nav_row.addWidget(self.btn_next)
+
+        outer.addLayout(nav_row)
+
+        # ── Séparateur ──
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        outer.addWidget(sep)
 
         # --- Boutons bas ---
         row = QHBoxLayout()
@@ -784,7 +883,7 @@ class AtlasDialog(QDialog):
         )
         self.btn_gen.clicked.connect(self._generate)
         row.addWidget(self.btn_gen)
-        main.addLayout(row)
+        outer.addLayout(row)
 
         # --- Barre de progression + Annuler ---
         progress_row = QHBoxLayout()
@@ -796,11 +895,35 @@ class AtlasDialog(QDialog):
         self.btn_cancel.setFixedWidth(90)
         self.btn_cancel.clicked.connect(self._cancel_generation)
         progress_row.addWidget(self.btn_cancel)
-        main.addLayout(progress_row)
+        outer.addLayout(progress_row)
         self.lbl_status = QLabel("")
-        main.addWidget(self.lbl_status)
+        outer.addWidget(self.lbl_status)
 
-        self.setLayout(main)
+        self.setLayout(outer)
+        self._update_nav()
+
+    def _update_nav(self):
+        """Met à jour les boutons de navigation selon la page active."""
+        idx = self.stack.currentIndex()
+        total = self.stack.count()
+        self.btn_prev.setVisible(idx > 0)
+        self.btn_next.setVisible(idx < total - 1)
+        self.btn_gen.setVisible(idx == total - 1)
+        self.lbl_step.setText(
+            self.tr('step_label').format(cur=idx + 1, total=total)
+        )
+
+    def _next_page(self):
+        idx = self.stack.currentIndex()
+        if idx < self.stack.count() - 1:
+            self.stack.setCurrentIndex(idx + 1)
+            self._update_nav()
+
+    def _prev_page(self):
+        idx = self.stack.currentIndex()
+        if idx > 0:
+            self.stack.setCurrentIndex(idx - 1)
+            self._update_nav()
 
     def _retranslate_ui(self):
         self.setWindowTitle(self.tr('window_title'))
@@ -840,6 +963,9 @@ class AtlasDialog(QDialog):
         self.btn_gen.setText(self.tr('btn_gen'))
         self.btn_cancel.setText(self.tr('btn_cancel'))
         self.btn_about.setText(self.tr('btn_about'))
+        self.btn_next.setText(self.tr('btn_next'))
+        self.btn_prev.setText(self.tr('btn_prev'))
+        self._update_nav()
     # -------------------------------------------------------- slots
     def _show_about(self):
         dlg = AboutDialog(lang=self.lang, parent=self)
@@ -855,12 +981,16 @@ class AtlasDialog(QDialog):
         self.custom_fmt_widget.setVisible(custom)
 
     def _on_index_toggled(self, checked):
-        self.grp_field.setVisible(checked)
-        self.grp_output.setVisible(checked or self.chk_pdf.isChecked())
+        self.grp_field.setEnabled(checked)
+        self.grp_output.setVisible(
+            self.chk_index.isChecked() or self.chk_pdf.isChecked()
+        )
 
     def _on_pdf_toggled(self, checked):
-        self.grp_pdf_title.setVisible(checked)
-        self.grp_output.setVisible(checked or self.chk_index.isChecked())
+        self.grp_pdf_title.setEnabled(checked)
+        self.grp_output.setVisible(
+            self.chk_index.isChecked() or self.chk_pdf.isChecked()
+        )
 
     def _on_scale_changed(self, index):
         custom = (index == 4)
@@ -899,6 +1029,11 @@ class AtlasDialog(QDialog):
 
     def _start_draw(self):
         self.previous_tool = self.canvas.mapTool()
+        if self.rect_tool is not None:
+            try:
+                self.rect_tool.rectangleCreated.disconnect(self._on_rect_drawn)
+            except TypeError:
+                pass
         self.rect_tool = RectangleMapTool(self.canvas)
         self.rect_tool.rectangleCreated.connect(self._on_rect_drawn)
         self.canvas.setMapTool(self.rect_tool)
@@ -928,6 +1063,12 @@ class AtlasDialog(QDialog):
         layer.removeSelection()
 
         self.previous_tool = self.canvas.mapTool()
+        if hasattr(self, 'lasso_tool') and self.lasso_tool is not None:
+            try:
+                self.lasso_tool.lassoFinished.disconnect(self._on_lasso_finished)
+            except TypeError:
+                pass
+            self.lasso_tool.deleteLater()
         self.lasso_tool = LassoMapTool(self.canvas)
         self.lasso_tool.lassoFinished.connect(self._on_lasso_finished)
         self.canvas.setMapTool(self.lasso_tool)
@@ -1032,6 +1173,15 @@ class AtlasDialog(QDialog):
         layer = self._lasso_layer if hasattr(self, '_lasso_layer') else None
         n = layer.selectedFeatureCount() if layer else 0
 
+        # Libérer l'outil lasso
+        if hasattr(self, 'lasso_tool') and self.lasso_tool is not None:
+            try:
+                self.lasso_tool.lassoFinished.disconnect(self._on_lasso_finished)
+            except TypeError:
+                pass
+            self.lasso_tool.deleteLater()
+            self.lasso_tool = None
+
         # Supprimer le panneau flottant
         if hasattr(self, '_lasso_panel') and self._lasso_panel:
             self._lasso_panel.setParent(None)
@@ -1042,12 +1192,10 @@ class AtlasDialog(QDialog):
         if self.previous_tool:
             self.canvas.setMapTool(self.previous_tool)
 
-        # Mettre à jour le label et basculer sur "Objets sélectionnés"
+        # Mettre à jour le label (le lasso reste en mode 3)
         self.lbl_lasso.setText(
             self.tr('lasso_ok').format(n=n)
         )
-        if n > 0:
-            self.radio_sel.setChecked(True)
 
         self.show()
         self.raise_()
@@ -1152,7 +1300,7 @@ class AtlasDialog(QDialog):
         self.progress.setValue(value)
         self._pulse_base = value
         self._pulse_range = pulse_range
-        QApplication.processEvents()
+        QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def _next_step(self):
         """Planifie l'exécution de la prochaine étape (rend la main à Qt)."""
@@ -1169,8 +1317,19 @@ class AtlasDialog(QDialog):
             return
 
         crs = QgsProject.instance().crs()
+        if not crs.isValid():
+            QMessageBox.warning(self, self.tr('title_error'),
+                                "Project CRS is not defined. Please set a valid CRS.")
+            return
 
         extent_mode = self.bg_extent.checkedId()
+        if extent_mode == 1:
+            # Emprise de la carte : capturer l'emprise actuelle du canevas
+            canvas_ext = self.canvas.extent()
+            if canvas_ext.isNull() or canvas_ext.isEmpty():
+                QMessageBox.warning(self, self.tr('title_error'), self.tr('err_extent'))
+                return
+            self.drawn_extent = canvas_ext
         if extent_mode == 2 and self.drawn_extent is None:
             QMessageBox.warning(self, self.tr('title_error'), self.tr('err_extent'))
             return
@@ -1182,7 +1341,7 @@ class AtlasDialog(QDialog):
 
         if with_index or with_pdf:
             out_dir = self.txt_dir.text().strip()
-            if not out_dir or not os.path.isdir(out_dir):
+            if not out_dir or not Path(out_dir).is_dir():
                 QMessageBox.warning(self, self.tr('title_error'), self.tr('err_dir'))
                 return
 
@@ -1291,13 +1450,15 @@ class AtlasDialog(QDialog):
                     self._log(self.tr('st_index'), index_path)
                     self._set_progress(57, pulse_range=6)
 
+                    col_title = ctx['field_name'] if ctx['field_name'] else None
                     idx = IndexGenerator(
                         conduite_layer=ctx['layer'],
                         grid_layer=ctx['grid_layer'],
                         street_names=ctx['_streets'],
                         crs=ctx['crs'],
                         format_name=ctx['fmt'],
-                        orientation=ctx['orient']
+                        orientation=ctx['orient'],
+                        column_title=col_title
                     )
                     _, ctx['sorted_index'] = idx.generate(ctx['out_dir'])
 
@@ -1338,6 +1499,7 @@ class AtlasDialog(QDialog):
 
                     from .pdf_exporter import PdfExporter
                     pdf_title = self.txt_pdf_title.text().strip() or self.tr('pdf_title_ph')
+                    col_title = ctx['field_name'] if ctx['field_name'] else None
                     exporter = PdfExporter(
                         layout=ctx['layout'],
                         grid_layer=ctx['grid_layer'],
@@ -1351,6 +1513,7 @@ class AtlasDialog(QDialog):
                         lang=self.lang,
                         progress_callback=lambda v: self._set_progress(v),
                         log_callback=lambda msg, fp=None: self._log(msg, fp),
+                        column_title=col_title,
                     )
                     exporter.export()
 
@@ -1380,12 +1543,6 @@ class AtlasDialog(QDialog):
                     from qgis.PyQt.QtCore import QUrl
                     from qgis.PyQt.QtGui import QDesktopServices
                     QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
-
-                # Ouvrir le designer
-                self.iface.openLayoutDesigner(ctx['layout'])
-                self.show()
-                self.raise_()
-                self.activateWindow()
 
         except Exception as e:
             import traceback
