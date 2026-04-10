@@ -1,6 +1,30 @@
+<div align="center">
+
 # ATLAS Index Pro
 
-> Plugin QGIS · v3.0.1 · QGIS 3.16+ · Multilingue FR / EN / ES / PT / DE
+<img src="icon.png" width="80" alt="ATLAS Index Pro icon"/>
+
+**Générateur de feuillets atlas pour QGIS — avec index géographique et export PDF complet**
+
+[![QGIS](https://img.shields.io/badge/QGIS-3.16%2B-green?logo=qgis&logoColor=white)](https://qgis.org)
+[![Version](https://img.shields.io/badge/version-3.0.1-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-GPL%20v3-orange)](LICENSE)
+[![Languages](https://img.shields.io/badge/languages-FR%20%7C%20EN%20%7C%20ES%20%7C%20PT%20%7C%20DE-purple)](README.md)
+
+</div>
+
+---
+
+<div align="center">
+
+## Aperçu rapide · Quick Overview
+
+| Étape 1 — Lancer et configurer | Étape 2 — Générer la grille | Étape 3 — Exporter en PDF |
+|:---:|:---:|:---:|
+| ![Étape 1](Screenshot/Etape1.png) | ![Étape 2](Screenshot/Etape2.png) | ![Étape 3](Screenshot/etape3.png) |
+| Sélectionnez votre couche vecteur,<br>choisissez le format et l'échelle | La grille de feuillets est créée<br>et ajoutée au projet QGIS | PDF complet généré : garde,<br>index, plan, feuillets liés |
+
+</div>
 
 ---
 
@@ -46,13 +70,27 @@ Fini les mises en page manuelles : définissez votre emprise, choisissez votre f
 
 ### Utilisation
 
+**Étape 1 — Lancer et configurer**
+
+![Étape 1](Screenshot/Etape1.png)
+
 1. **Lancez le plugin** via la barre d'outils ou le menu **ATLAS Index Pro**.
 2. **Sélectionnez votre couche vecteur** de référence (ex. : réseau de conduites, bâtiments, voirie...).
 3. **Choisissez le format de feuillet** : A4 ou A3, portrait ou paysage.
 4. **Définissez l'échelle** souhaitée pour les feuillets.
 5. **Configurez les paramètres avancés** si besoin : recouvrement, marge, DPI.
-6. Cliquez sur **Générer la grille** : la couche de feuillets est ajoutée au projet.
-7. Cliquez sur **Exporter en PDF** pour obtenir le document complet avec index et liens.
+
+**Étape 2 — Générer la grille**
+
+![Étape 2](Screenshot/Etape2.png)
+
+6. Cliquez sur **Générer la grille** : la couche de feuillets est créée et ajoutée au projet.
+
+**Étape 3 — Exporter en PDF**
+
+![Étape 3](Screenshot/etape3.png)
+
+7. Cliquez sur **Exporter en PDF** pour obtenir le document complet avec index et liens hypertexte.
 
 ---
 
@@ -98,13 +136,27 @@ No more manual print layouts: define your extent, choose your paper format and s
 
 ### Usage
 
+**Step 1 — Launch and configure**
+
+![Step 1](Screenshot/Etape1.png)
+
 1. **Launch the plugin** from the toolbar or the **ATLAS Index Pro** menu.
 2. **Select your reference vector layer** (e.g. pipe network, buildings, roads...).
 3. **Choose the sheet format**: A4 or A3, portrait or landscape.
 4. **Set the scale** for the atlas sheets.
 5. **Configure advanced settings** if needed: overlap, margin, DPI.
+
+**Step 2 — Generate the grid**
+
+![Step 2](Screenshot/Etape2.png)
+
 6. Click **Generate grid**: the sheet layer is added to the project.
-7. Click **Export to PDF** to get the complete document with index and links.
+
+**Step 3 — Export to PDF**
+
+![Step 3](Screenshot/etape3.png)
+
+7. Click **Export to PDF** to get the complete document with index and hyperlinks.
 
 ---
 
@@ -113,6 +165,8 @@ No more manual print layouts: define your extent, choose your paper format and s
 ### Descripción
 
 **ATLAS Index Pro** es un plugin de QGIS que genera automáticamente una cuadrícula de hojas de atlas (A4/A3, vertical/horizontal, multiescala) a partir de cualquier capa vectorial, con índice geográfico de objetos, mapa de conjunto y exportación PDF completa en un clic.
+
+> Las capturas de pantalla del flujo de trabajo se encuentran en la sección [Aperçu rapide](#aperçu-rapide--quick-overview) al inicio de este documento.
 
 ### Funcionalidades
 
@@ -137,6 +191,8 @@ No more manual print layouts: define your extent, choose your paper format and s
 
 **ATLAS Index Pro** é um plugin QGIS que gera automaticamente uma grade de folhas de atlas (A4/A3, retrato/paisagem, multiescala) a partir de qualquer camada vetorial, com índice geográfico de objetos, mapa geral e exportação PDF completa com um clique.
 
+> As capturas de ecrã do fluxo de trabalho estão disponíveis na secção [Aperçu rapide](#aperçu-rapide--quick-overview) no início deste documento.
+
 ### Funcionalidades
 
 - **Grade de folhas automática**: A4 ou A3, retrato ou paisagem, na escala desejada
@@ -159,6 +215,8 @@ No more manual print layouts: define your extent, choose your paper format and s
 ### Beschreibung
 
 **ATLAS Index Pro** ist ein QGIS-Plugin, das automatisch ein Atlas-Blattgitter (A4/A3, Hoch-/Querformat, mehrskalig) aus einer beliebigen Vektorebene erstellt — mit geografischem Objektindex, Übersichtskarte und vollständigem PDF-Export auf Knopfdruck.
+
+> Workflow-Screenshots finden Sie im Abschnitt [Aperçu rapide](#aperçu-rapide--quick-overview) am Anfang dieses Dokuments.
 
 ### Funktionen
 
@@ -183,6 +241,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 | Version | Notes |
 |---------|-------|
+| **3.0.1** | Corrections mineures — Stabilité améliorée |
 | **3.0.0** | 24 corrections — Fusion PDF universelle sans dépendance externe — Optimisation performance — Titre colonne index dynamique — DPI 150 par défaut — Licence GPL v3 |
 | **2.0.0** | Renommé ATLAS Index Pro — Export PDF complet (garde, index, plan, feuillets) — Liens hypertexte — Plan d'ensemble — Interface 5 langues — Paramètre DPI |
 | **1.1.0** | Interface bilingue FR/EN — Généralisation à tout type d'objet vecteur — Index HTML paginé — Grille auto-stylisée — Paramètres avancés |
@@ -192,16 +251,19 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ## Auteur · Author
 
+<div align="center">
+
 Développé par / Developed by **Yoan Laloux**
 
-Technicien SIG — Vichy Communauté
-GIS Technician — Vichy Communauté
+Technicien SIG — Vichy Communauté · GIS Technician — Vichy Communauté
 
-- Courriel / Email : [y.laloux@vichy-communaute.fr](mailto:y.laloux@vichy-communaute.fr)
-- GitHub : [Cartoyoyo](https://github.com/Cartoyoyo)
+[![Email](https://img.shields.io/badge/Email-y.laloux%40vichy--communaute.fr-blue?logo=gmail&logoColor=white)](mailto:y.laloux@vichy-communaute.fr)
+[![GitHub](https://img.shields.io/badge/GitHub-Cartoyoyo-black?logo=github)](https://github.com/Cartoyoyo)
 
-Concept et idée originale par Yoan Laloux — développé avec l'assistance d'outils d'IA générative.
-Concept and original idea by Yoan Laloux — developed with the assistance of generative AI tools.
+*Concept et idée originale par Yoan Laloux — développé avec l'assistance d'outils d'IA générative.*
+*Concept and original idea by Yoan Laloux — developed with the assistance of generative AI tools.*
+
+</div>
 
 ---
 
