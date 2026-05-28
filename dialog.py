@@ -393,8 +393,17 @@ class AboutDialog(QDialog):
         lbl_name.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_name)
 
-        # Version
-        lbl_version = QLabel("Version 3.0.1")
+        # Lecture metadata.txt (version, author, email)
+        _meta_vals = {'version': '?', 'author': 'Yoan Laloux', 'email': ''}
+        _meta = os.path.join(os.path.dirname(__file__), 'metadata.txt')
+        if os.path.exists(_meta):
+            with open(_meta, encoding='utf-8') as _f:
+                for _line in _f:
+                    for _k in _meta_vals:
+                        if _line.startswith(_k + '='):
+                            _meta_vals[_k] = _line.split('=', 1)[1].strip()
+
+        lbl_version = QLabel("Version " + _meta_vals['version'])
         lbl_version.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_version)
 
@@ -405,9 +414,14 @@ class AboutDialog(QDialog):
         layout.addWidget(sep)
 
         # Author
-        lbl_author = QLabel(
-            '<a href="mailto:y.laloux@vichy-communaute.fr">Yoan Laloux</a>'
-        )
+        _author = _meta_vals['author']
+        _email = _meta_vals['email']
+        if _email:
+            lbl_author = QLabel(
+                '<a href="mailto:%s">%s</a>' % (_email, _author)
+            )
+        else:
+            lbl_author = QLabel(_author)
         lbl_author.setOpenExternalLinks(True)
         lbl_author.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_author)
@@ -451,7 +465,7 @@ class AtlasDialog(QDialog):
         self.lang = 'fr'
         self.overlap_pct = 0.0
         self.margin_pct = 10.0
-        self.dpi = 150
+        self.dpi = 96
         self._title_user_edited = False
 
         self.setMinimumWidth(520)

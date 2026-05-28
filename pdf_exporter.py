@@ -1,14 +1,19 @@
 import os
 import math
+import time
+import platform
 import tempfile
 from datetime import date
+from urllib.parse import urlparse, parse_qs
 
 from qgis.core import (
     QgsLayoutExporter, QgsProject, QgsPrintLayout, QgsLayoutItemMap,
     QgsLayoutItemLabel, QgsLayoutItemScaleBar, QgsLayoutPoint,
-    QgsLayoutSize, QgsUnitTypes, QgsRectangle, QgsTextFormat
+    QgsLayoutSize, QgsUnitTypes, QgsRectangle, QgsTextFormat,
+    QgsLayoutRenderContext, QgsRasterLayer, QgsVectorLayer,
+    QgsNetworkAccessManager, Qgis
 )
-from qgis.PyQt.QtCore import QMarginsF, QSizeF, Qt
+from qgis.PyQt.QtCore import QMarginsF, QSizeF, Qt, QSettings, QUrl
 from qgis.PyQt.QtGui import QTextDocument, QPainter, QFont, QColor
 try:
     from qgis.PyQt.QtGui import QPageSize, QPageLayout
@@ -60,6 +65,175 @@ _TR = {
 }
 
 
+class NetworkMonitor:
+    """Espionne QgsNetworkAccessManager pour compter requêtes/octets/erreurs.
+
+    Permet d'identifier les goulots WMS/WMTS/XYZ : nombre de tuiles,
+    volume téléchargé, latence moyenne, codes HTTP, hôtes contactés.
+    """
+    def __init__(self):
+        self.requests = 0           # nombre de requêtes lancées
+        self.finished = 0           # nombre terminées
+        self.errors = 0             # erreurs réseau
+        self.bytes_total = 0        # octets téléchargés
+        self.from_cache = 0         # réponses servies depuis le cache
+        self.hosts = {}             # hôte -> nombre de requêtes
+        self.codes = {}             # code HTTP -> count
+        self.latencies = []         # latences ms (échantillon)
+        self._pending = {}          # id reply -> t_start
+        self._nam = None
+        self._connected = False
+
+    def start(self):
+        try:
+            self._nam = QgsNetworkAccessManager.instance()
+            self._nam.requestAboutToBeCreated.connect(self._on_request)
+            self._nam.finished.connect(self._on_finished)
+            self._connected = True
+        except Exception:
+            self._connected = False
+
+    def stop(self):
+        if not self._connected or not self._nam:
+            return
+        try:
+            self._nam.requestAboutToBeCreated.disconnect(self._on_request)
+            self._nam.finished.disconnect(self._on_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self._connected = False
+
+    def snapshot(self):
+        """Retourne un dict des compteurs courants (pour calcul delta)."""
+        return {
+            'requests': self.requests,
+            'finished': self.finished,
+            'errors': self.errors,
+            'bytes': self.bytes_total,
+            'cache': self.from_cache,
+        }
+
+    def delta_str(self, before):
+        """Différence depuis snapshot — string lisible."""
+        dr = self.requests - before['requests']
+        db = self.bytes_total - before['bytes']
+        dc = self.from_cache - before['cache']
+        de = self.errors - before['errors']
+        if dr == 0:
+            return "réseau: 0 req"
+        parts = [f"{dr} req"]
+        if dc:
+            parts.append(f"{dc} cache")
+        if db:
+            parts.append(_fmt_bytes(db))
+        if de:
+            parts.append(f"⚠ {de} erreurs")
+        return "réseau: " + ", ".join(parts)
+
+    def _on_request(self, params):
+        self.requests += 1
+        try:
+            url = params.request().url()
+            host = url.host() or '?'
+            self.hosts[host] = self.hosts.get(host, 0) + 1
+        except Exception:
+            pass
+
+    def _on_finished(self, reply_content):
+        self.finished += 1
+        try:
+            # API moderne : QgsNetworkReplyContent
+            err = reply_content.error()
+            if err != 0:
+                self.errors += 1
+            # Code HTTP
+            attr = reply_content.attribute(0)  # HttpStatusCodeAttribute = 0
+            if attr is not None:
+                code = int(attr) if not isinstance(attr, int) else attr
+                self.codes[code] = self.codes.get(code, 0) + 1
+            # Taille
+            content = reply_content.content()
+            if content:
+                self.bytes_total += len(content)
+            # Cache hit ?
+            from_cache_attr = reply_content.attribute(3)  # SourceIsFromCacheAttribute
+            if from_cache_attr:
+                self.from_cache += 1
+        except Exception:
+            pass
+
+    def summary(self):
+        """Résumé final formaté pour log."""
+        lines = []
+        lines.append(f"  • Requêtes totales   : {self.requests}")
+        lines.append(f"  • Réponses terminées : {self.finished}")
+        if self.from_cache:
+            ratio = 100 * self.from_cache / max(1, self.finished)
+            lines.append(f"  • Servies par cache  : {self.from_cache} ({ratio:.0f}%)")
+        lines.append(f"  • Volume téléchargé  : {_fmt_bytes(self.bytes_total)}")
+        if self.errors:
+            lines.append(f"  • ⚠ Erreurs réseau   : {self.errors}")
+        if self.hosts:
+            top = sorted(self.hosts.items(), key=lambda x: -x[1])[:5]
+            lines.append("  • Hôtes contactés (top 5) :")
+            for host, n in top:
+                lines.append(f"      - {host} : {n} req")
+        if self.codes:
+            codes_str = ", ".join(f"{c}: {n}" for c, n in sorted(self.codes.items()))
+            lines.append(f"  • Codes HTTP         : {codes_str}")
+        return "\n".join(lines)
+
+
+def _fmt_bytes(n):
+    """Octets → string lisible (KB/MB/GB)."""
+    for unit in ('o', 'Ko', 'Mo', 'Go'):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}" if unit != 'o' else f"{n} {unit}"
+        n /= 1024
+    return f"{n:.1f} To"
+
+
+def _detect_provider_type(layer):
+    """Classifie une couche : WMS / WMTS / XYZ / WFS / Raster local / Vecteur / …"""
+    if layer is None:
+        return "?"
+    try:
+        provider = layer.providerType()
+    except Exception:
+        provider = ""
+    if provider == 'wms':
+        # 'wms' couvre WMS, WMTS et XYZ → inspecter l'URI
+        try:
+            src = layer.source()
+            if 'type=xyz' in src.lower():
+                return 'XYZ'
+            if 'type=wmts' in src.lower() or 'wmts' in src.lower():
+                return 'WMTS'
+            return 'WMS'
+        except Exception:
+            return 'WMS'
+    if provider == 'wfs':
+        return 'WFS'
+    if isinstance(layer, QgsRasterLayer):
+        return 'Raster'
+    if isinstance(layer, QgsVectorLayer):
+        return f"Vecteur ({layer.featureCount()} entités)"
+    return provider or "?"
+
+
+def _extract_wms_url(layer):
+    """Extrait l'URL serveur d'une couche WMS/WMTS/XYZ pour log."""
+    try:
+        src = layer.source()
+        for part in src.split('&'):
+            if part.lower().startswith('url='):
+                from urllib.parse import unquote
+                return unquote(part[4:])[:120]
+    except Exception:
+        pass
+    return "(URL inconnue)"
+
+
 class PdfExporter:
     """Génère un PDF complet : page de garde + index + atlas + page blanche."""
 
@@ -95,8 +269,17 @@ class PdfExporter:
             w, h = h, w
         return w, h
 
+    # Résolution d'impression pour page de garde et index.
+    # QPrinter.HighResolution sur Windows = 1200 DPI par défaut :
+    # une page A4 = 9 921 × 14 031 px = 139 M pixels à rastériser → lent.
+    # À 96 DPI : 794 × 1 123 px = 0,9 M pixels → ~160× plus rapide.
+    # Bonus : à 96 DPI les tailles en pt sont "naturelles" (1pt = 1/72")
+    # sans aucune compensation nécessaire.
+    _PRINTER_DPI = 96
+
     def _make_printer(self, path, w_mm, h_mm):
         printer = QPrinter(QPrinter.HighResolution)
+        printer.setResolution(self._PRINTER_DPI)   # ← force 150 DPI au lieu de 1200
         printer.setOutputFormat(QPrinter.PdfFormat)
         printer.setOutputFileName(path)
         page_size = QPageSize(QSizeF(w_mm, h_mm), QPageSize.Millimeter)
@@ -109,8 +292,152 @@ class PdfExporter:
             self.progress_cb(value)
 
     def _log(self, msg, filepath=None):
+        # Callback UI (dialogue QGIS)
         if self.log_cb:
             self.log_cb(msg, filepath)
+        # Écriture aussi dans le fichier log à côté du PDF de sortie
+        self._log_to_file(msg)
+
+    def _log_to_file(self, msg):
+        """Append au fichier atlas_log.txt dans output_dir.
+        Le fichier est créé/vidé au début de l'export (_open_log_file).
+        """
+        if not getattr(self, '_log_path', None):
+            return
+        try:
+            with open(self._log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        except OSError:
+            pass
+
+    def _open_log_file(self):
+        """Initialise le fichier log dans output_dir."""
+        try:
+            self._log_path = os.path.join(self.output_dir, 'atlas_log.txt')
+            with open(self._log_path, 'w', encoding='utf-8') as f:
+                f.write(f"=== ATLAS Index Pro — export log ===\n")
+                f.write(f"Date : {date.today().isoformat()} "
+                        f"{time.strftime('%H:%M:%S')}\n")
+                f.write(f"Sortie : {self.output_dir}\n\n")
+        except OSError:
+            self._log_path = None
+
+    # ---------------------------------------------------------------- timing
+    def _step_start(self, label):
+        """Marque le début d'une étape chronométrée."""
+        self._step_label = label
+        self._step_t0 = time.perf_counter()
+        self._log(f"▶ {label}…")
+
+    def _step_end(self, extra=""):
+        """Log la fin de l'étape précédente avec son temps écoulé."""
+        if not hasattr(self, '_step_t0'):
+            return
+        dt = time.perf_counter() - self._step_t0
+        suffix = f" — {extra}" if extra else ""
+        self._log(f"✓ {self._step_label} : {self._fmt_dur(dt)}{suffix}")
+        self._step_t0 = None
+
+    @staticmethod
+    def _fmt_dur(seconds):
+        """Format lisible : '1m 23s' ou '4.2s' ou '230ms'."""
+        if seconds < 1:
+            return f"{int(seconds * 1000)}ms"
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        m, s = divmod(seconds, 60)
+        return f"{int(m)}m {int(s)}s"
+
+    # ---------------------------------------------------------------- diagnostics
+    def _log_system_info(self):
+        """Inventaire système / QGIS / projet — utile pour identifier le contexte."""
+        try:
+            import os as _os
+            try:
+                qgis_ver = Qgis.QGIS_VERSION
+            except Exception:
+                qgis_ver = "?"
+            s = QSettings()
+            self._log("┌─ Contexte système ──")
+            self._log(f"│  QGIS              : {qgis_ver}")
+            self._log(f"│  OS                : {platform.system()} {platform.release()}")
+            self._log(f"│  CPU               : {_os.cpu_count() or '?'} cœurs")
+            self._log(f"│  Rendu parallèle   : {s.value('/qgis/parallel_rendering', True, bool)}")
+            self._log(f"│  Threads max       : {s.value('/qgis/max_threads', -1, int)}")
+            cache = s.value('/cache/size', 50 * 1024 * 1024, int)
+            self._log(f"│  Cache réseau      : {_fmt_bytes(cache)}")
+            self._log("└──")
+        except Exception as e:
+            self._log(f"(info système indisponible : {e})")
+
+    def _log_export_params(self, w_mm, h_mm, num_sheets):
+        """Paramètres d'export : format, DPI, résolution pixel, échelle."""
+        try:
+            # Pixels par feuillet à ce DPI
+            px_w = int(w_mm / 25.4 * self.dpi)
+            px_h = int(h_mm / 25.4 * self.dpi)
+            megapix = (px_w * px_h) / 1_000_000
+            # Couverture terrain (m × m) à l'échelle 1:N
+            ground_w = (w_mm / 1000.0) * self.scale
+            ground_h = (h_mm / 1000.0) * self.scale
+            self._log("┌─ Paramètres export ──")
+            self._log(f"│  Format            : {self.format_name} {self.orientation} "
+                      f"({w_mm:.0f}×{h_mm:.0f} mm)")
+            self._log(f"│  Échelle           : 1:{self.scale}")
+            self._log(f"│  Couverture/page   : {ground_w:.0f}×{ground_h:.0f} m")
+            self._log(f"│  DPI               : {self.dpi}")
+            self._log(f"│  Pixels/page       : {px_w}×{px_h} ({megapix:.1f} Mpx)")
+            self._log(f"│  Nb feuillets      : {num_sheets}")
+            self._log(f"│  Total pixels      : {megapix * num_sheets:.0f} Mpx")
+            self._log("└──")
+        except Exception as e:
+            self._log(f"(params indisponibles : {e})")
+
+    def _log_layer_inventory(self):
+        """Liste les couches visibles avec type, provider, source — repère WMS lents."""
+        try:
+            project = QgsProject.instance()
+            root = project.layerTreeRoot()
+            visible = [n.layer() for n in root.findLayers()
+                       if n.isVisible() and n.layer() is not None]
+            self._log(f"┌─ Couches visibles ({len(visible)}) ──")
+            wms_count = 0
+            for layer in visible:
+                kind = _detect_provider_type(layer)
+                marker = "🌐" if kind in ('WMS', 'WMTS', 'XYZ', 'WFS') else "  "
+                self._log(f"│  {marker} [{kind:18s}] {layer.name()}")
+                if kind in ('WMS', 'WMTS', 'XYZ'):
+                    wms_count += 1
+                    url = _extract_wms_url(layer)
+                    self._log(f"│       ↳ {url}")
+                    # Format de tuile si dispo
+                    try:
+                        src = layer.source()
+                        for key in ('format=', 'tileMatrixSet=', 'crs='):
+                            for part in src.split('&'):
+                                if part.lower().startswith(key):
+                                    self._log(f"│       ↳ {part}")
+                    except Exception:
+                        pass
+            if wms_count:
+                self._log(f"│  → {wms_count} couche(s) réseau (impact direct sur la vitesse)")
+            self._log("└──")
+        except Exception as e:
+            self._log(f"(inventaire couches indisponible : {e})")
+
+    def _log_project_info(self):
+        """CRS projet + emprise grille."""
+        try:
+            project = QgsProject.instance()
+            crs = project.crs()
+            self._log(f"  CRS projet         : {crs.authid()} ({crs.description()})")
+            self._log(f"  Unités carte       : {QgsUnitTypes.toString(crs.mapUnits())}")
+            extent = self.grid_layer.extent()
+            self._log(f"  Emprise grille     : {extent.width():.0f}×{extent.height():.0f} "
+                      f"unités carte")
+            self._log(f"  Couche grille      : {self.grid_layer.featureCount()} cellules")
+        except Exception as e:
+            self._log(f"(info projet indisponible : {e})")
 
     # ---------------------------------------------------------------- atlas refs in order
     def _atlas_ref_order(self):
@@ -138,35 +465,37 @@ class PdfExporter:
         orient_label = self._tr('orient_l') if self.orientation == 'paysage' else self._tr('orient_p')
         today = date.today().strftime('%d/%m/%Y')
 
+        # Tailles naturelles pour 96 DPI : pas de compensation nécessaire
+        # (ratio QPrinter/screen = 1 → pt = pt réels)
         html = f'''<html><body style="margin:0; font-family:Arial, Helvetica, sans-serif;">
 <table width="100%" height="100%" cellpadding="0" cellspacing="0">
 <tr><td align="center" valign="middle">
     <div style="text-align:center;">
-        <div style="font-size:280pt; font-weight:bold; color:#2c3e50;
-                    margin-bottom:400px; line-height:1.3;">
+        <div style="font-size:36pt; font-weight:bold; color:#2c3e50;
+                    margin-bottom:30px; line-height:1.3;">
             {self._esc(self.title)}
         </div>
-        <div style="width:2000px; height:20px; background:#2980b9;
-                    margin:0 auto 400px;"></div>
-        <table cellpadding="60" cellspacing="0"
-               style="margin:0 auto; font-size:120pt; color:#555;">
+        <div style="width:200px; height:3px; background:#2980b9;
+                    margin:0 auto 30px;"></div>
+        <table cellpadding="6" cellspacing="0"
+               style="margin:0 auto; font-size:12pt; color:#555;">
             <tr>
-                <td style="text-align:right; font-weight:bold; padding-right:120px;">
+                <td style="text-align:right; font-weight:bold; padding-right:12px;">
                     {self._tr('cover_scale')}</td>
                 <td>1 / {self.scale}</td>
             </tr>
             <tr>
-                <td style="text-align:right; font-weight:bold; padding-right:120px;">
+                <td style="text-align:right; font-weight:bold; padding-right:12px;">
                     {self._tr('cover_format')}</td>
                 <td>{self.format_name} {orient_label}</td>
             </tr>
             <tr>
-                <td style="text-align:right; font-weight:bold; padding-right:120px;">
+                <td style="text-align:right; font-weight:bold; padding-right:12px;">
                     {self._tr('cover_sheets')}</td>
                 <td>{num_sheets}</td>
             </tr>
             <tr>
-                <td style="text-align:right; font-weight:bold; padding-right:120px;">
+                <td style="text-align:right; font-weight:bold; padding-right:12px;">
                     {self._tr('cover_date')}</td>
                 <td>{today}</td>
             </tr>
@@ -207,11 +536,11 @@ class PdfExporter:
         # Tri alphabétique
         sorted_items = sorted(filtered.items(), key=lambda x: x[0].lower())
 
-        # Taille du texte : ×10 pour compenser le ratio QPrinter
-        body_pt = 120
-        title_pt = max(360, int(min(w_mm, h_mm) * 1.70))
+        # Tailles naturelles pour 96 DPI (pt réels, pas de compensation)
+        body_pt = 10
+        title_pt = max(24, int(min(w_mm, h_mm) * 0.11))
         head_pt = body_pt
-        pad = max(30, int(body_pt * 0.3))
+        pad = max(2, int(body_pt * 0.25))
 
         # Répartir en 2 colonnes (gauche et droite), lecture verticale
         total = len(sorted_items)
@@ -221,7 +550,7 @@ class PdfExporter:
 
         # Construire les lignes du tableau 4 colonnes
         rows_html = ''
-        sep = f'border-left:10px solid #ccc;'
+        sep = f'border-left:1px solid #ccc;'
         for i in range(half):
             # Colonne gauche
             street_l, refs_l = col_left[i]
@@ -236,21 +565,21 @@ class PdfExporter:
 
             rows_html += (
                 f'<tr>'
-                f'<td style="padding:{pad}px 60px; border-bottom:8px solid #eee;'
+                f'<td style="padding:{pad}px 8px; border-bottom:1px solid #eee;'
                 f' font-size:{body_pt}pt;">'
                 f'{self._esc(street_l)}</td>'
-                f'<td style="padding:{pad}px 60px; border-bottom:8px solid #eee;'
+                f'<td style="padding:{pad}px 8px; border-bottom:1px solid #eee;'
                 f' font-size:{body_pt}pt; color:#2980b9;">{refs_str_l}</td>'
-                f'<td style="padding:{pad}px 60px; border-bottom:8px solid #eee;'
+                f'<td style="padding:{pad}px 8px; border-bottom:1px solid #eee;'
                 f' {sep} font-size:{body_pt}pt;">'
                 f'{self._esc(street_r)}</td>'
-                f'<td style="padding:{pad}px 60px; border-bottom:8px solid #eee;'
+                f'<td style="padding:{pad}px 8px; border-bottom:1px solid #eee;'
                 f' font-size:{body_pt}pt; color:#2980b9;">{refs_str_r}</td>'
                 f'</tr>\n'
             )
 
         # En-tête 4 colonnes
-        th_style = f'padding:{pad+15}px 60px; text-align:left; font-size:{head_pt}pt;'
+        th_style = f'padding:{pad+2}px 8px; text-align:left; font-size:{head_pt}pt;'
         header = (
             f'<tr style="background:#2c3e50; color:#fff;">'
             f'<th style="{th_style}">{self._esc(self.column_title)}</th>'
@@ -262,8 +591,8 @@ class PdfExporter:
 
         html = f'''<html><body style="margin:0; font-family:Arial, Helvetica, sans-serif;">
 <div style="font-size:{title_pt}pt; font-weight:bold; color:#2c3e50;
-            border-bottom:20px solid #2c3e50; padding-bottom:80px;
-            margin-bottom:140px;">
+            border-bottom:3px solid #2c3e50; padding-bottom:10px;
+            margin-bottom:18px;">
     {self._tr('idx_title')}
 </div>
 <table width="100%" cellpadding="0" cellspacing="0">
@@ -320,10 +649,27 @@ class PdfExporter:
         map_item.attemptResize(QgsLayoutSize(
             map_w, map_h, QgsUnitTypes.LayoutMillimeters
         ))
-        # Fixer explicitement les couches visibles (le layout temporaire
-        # ne résout pas les couches raster/tuiles comme OSM sinon)
+        # Plan d'ensemble : fond OSM + grille uniquement
+        osm_layer = next(
+            (l for l in project.mapLayers().values()
+             if isinstance(l, QgsRasterLayer) and l.isValid()
+             and ('osm' in l.name().lower() or 'openstreetmap' in l.name().lower())),
+            None
+        )
+        if osm_layer is None:
+            osm_uri = ("type=xyz"
+                       "&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                       "&zmax=19&zmin=0&crs=EPSG:3857")
+            osm_layer = QgsRasterLayer(osm_uri, "OpenStreetMap", "wms")
+            if not osm_layer.isValid():
+                osm_layer = None
+        overview_layers = []
+        if osm_layer:
+            overview_layers.append(osm_layer)
+        overview_layers.append(self.grid_layer)
+
         map_item.setKeepLayerSet(True)
-        map_item.setLayers(project.layerTreeRoot().layerOrder())
+        map_item.setLayers(overview_layers)
 
         # Emprise = grille entière, ajustée au ratio du cadre carte
         extent = self.grid_layer.extent()
@@ -411,7 +757,8 @@ class PdfExporter:
 
         self.grid_layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
         self.grid_layer.setLabelsEnabled(True)
-        self.grid_layer.triggerRepaint()
+        # Pas de triggerRepaint() ici : inutile avant l'export PDF
+        # (évite un rendu complet du canvas QGIS principal)
 
         try:
             # ── Titre (taille proportionnelle à la page) ──
@@ -455,7 +802,13 @@ class PdfExporter:
             # ── Export PDF ──
             exporter = QgsLayoutExporter(layout)
             settings = QgsLayoutExporter.PdfExportSettings()
-            settings.dpi = self.dpi
+            # Vue d'ensemble : 96 DPI suffit (limite tuiles WMS à télécharger)
+            settings.dpi = min(self.dpi, 96)
+            try:
+                settings.flags |= QgsLayoutExporter.FlagSimplifyGeometries
+            except (AttributeError, TypeError):
+                pass
+            # NE PAS activer rasterizeWholeImage : bloque le rendu WMS.
             exporter.exportToPdf(path, settings)
         finally:
             # Restaurer l'étiquetage original (même en cas d'erreur)
@@ -478,49 +831,120 @@ class PdfExporter:
         return path
 
     # ---------------------------------------------------------------- atlas
-    def _export_atlas_pages(self):
-        atlas = self.layout.atlas()
-        atlas.updateFeatures()
-        count = atlas.count()
-        pdfs = []
-        refs = []
+    def _apply_speed_optimizations(self):
+        """Active rendu parallèle + cache réseau étendu pour accélérer WMS.
 
-        exporter = QgsLayoutExporter(self.layout)
+        Sauvegarde les valeurs d'origine dans self._saved_settings pour
+        restauration via _restore_settings() en fin d'export.
+        """
+        s = QSettings()
+        self._saved_settings = {
+            'parallel_rendering': s.value("/qgis/parallel_rendering", True, bool),
+            'max_threads': s.value("/qgis/max_threads", -1, int),
+            'wms_capabilities_expiry': s.value("/qgis/defaultCapabilitiesExpiry", 24, int),
+            'network_cache_size': s.value("/cache/size", 50 * 1024 * 1024, int),
+        }
+        # Rendu parallèle activé (téléchargement WMS multi-thread)
+        s.setValue("/qgis/parallel_rendering", True)
+        # Plafonner à 8 threads max (au-delà : saturation serveur WMS)
+        import os as _os
+        cpu = _os.cpu_count() or 4
+        s.setValue("/qgis/max_threads", min(8, cpu))
+        # Cache réseau 500 Mo (vs 50 Mo par défaut) → réutilise les tuiles
+        # WMS entre l'overview et les feuillets atlas
+        s.setValue("/cache/size", 500 * 1024 * 1024)
+
+        # Configurer le layout : antialiasing désactivé pour les exports atlas
+        ctx = self.layout.renderContext()
+        self._saved_aa = ctx.flags()
+        try:
+            ctx.setFlag(QgsLayoutRenderContext.FlagAntialiasing, False)
+        except AttributeError:
+            pass
+
+    def _restore_settings(self):
+        """Restaure les paramètres modifiés par _apply_speed_optimizations()."""
+        if not hasattr(self, '_saved_settings'):
+            return
+        s = QSettings()
+        s.setValue("/qgis/parallel_rendering", self._saved_settings['parallel_rendering'])
+        s.setValue("/qgis/max_threads", self._saved_settings['max_threads'])
+        s.setValue("/cache/size", self._saved_settings['network_cache_size'])
+        if hasattr(self, '_saved_aa'):
+            try:
+                ctx = self.layout.renderContext()
+                ctx.setFlag(QgsLayoutRenderContext.FlagAntialiasing,
+                            bool(self._saved_aa & QgsLayoutRenderContext.FlagAntialiasing))
+            except AttributeError:
+                pass
+
+    def _make_atlas_settings(self):
+        """Crée les PdfExportSettings communes atlas + overview."""
         settings = QgsLayoutExporter.PdfExportSettings()
         settings.dpi = self.dpi
-        # Optimisations de rendu
         try:
             settings.flags |= QgsLayoutExporter.FlagSimplifyGeometries
         except (AttributeError, TypeError):
             pass
+        # Laisser QGIS rasteriser les WMS en images embedded (vs vecteur forcé)
+        # → JPEG embedded plus rapide et plus compact que vecteur pour rasters
         try:
-            settings.rasterizeWholeImage = True
+            settings.forceVectorOutput = False
         except AttributeError:
             pass
+        return settings
 
-        # Throttle : log + processEvents tous les LOG_EVERY feuillets
+    def _export_atlas_pages(self):
+        """Exporte les feuillets atlas en boucle (1 PDF par feuillet).
+
+        Note historique : on a essayé QgsLayoutExporter.exportToPdf(atlas, …)
+        (API statique multi-pages) mais sur QGIS 3.44 elle prend ~1m30 à
+        échouer silencieusement avant de tomber en fallback. On reste donc
+        sur la boucle manuelle, qui est prévisible et instrumentable.
+        """
+        atlas = self.layout.atlas()
+        atlas.updateFeatures()
+        count = atlas.count()
+        settings = self._make_atlas_settings()
+
+        pdfs = []
+        refs = []
+        exporter = QgsLayoutExporter(self.layout)
         log_every = max(1, count // 20) if count > 10 else 1
+        sheet_times = []
 
+        nm = getattr(self, '_netmon', None)
         for i in range(count):
             atlas.seekTo(i)
             path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
             self._tmp_files.append(path)
 
-            # Collecter les refs au passage (évite _atlas_ref_order séparé)
             feat = atlas.coverageLayer().getFeature(atlas.currentFeatureNumber())
-            refs.append(feat['reference'] if feat.isValid() else f"P{i+1}")
+            ref = feat['reference'] if feat.isValid() else f"P{i+1}"
+            refs.append(ref)
 
+            net_snap = nm.snapshot() if nm else None
+            t0 = time.perf_counter()
             result = exporter.exportToPdf(path, settings)
+            dt = time.perf_counter() - t0
+            sheet_times.append(dt)
             if result == QgsLayoutExporter.Success:
                 pdfs.append(path)
 
-            # UI feedback throttlé
             if i % log_every == 0 or i == count - 1:
-                self._log(f"Feuillet {i+1}/{count}", path)
+                net_str = f" — {nm.delta_str(net_snap)}" if nm else ""
+                self._log(f"   ↳ feuillet {i+1}/{count} [{ref}] : "
+                          f"{self._fmt_dur(dt)}{net_str}", path)
                 self._progress(75 + int(20 * (i + 1) / count))
                 QApplication.processEvents()
 
-        # Mettre en cache les refs pour éviter un 2e pass
+        # Stats récap (utile pour diagnostiquer WMS lent)
+        if sheet_times:
+            avg = sum(sheet_times) / len(sheet_times)
+            mx = max(sheet_times)
+            self._log(f"   ↳ stats : moy {self._fmt_dur(avg)}, "
+                      f"max {self._fmt_dur(mx)}")
+
         self._cached_refs = refs
         return pdfs
 
@@ -739,41 +1163,89 @@ class PdfExporter:
             raise FileNotFoundError(f"Output directory does not exist: {self.output_dir}")
         w_mm, h_mm = self._page_size_mm()
 
-        # 1) Références atlas dans l'ordre
+        # Initialiser le fichier log à côté du PDF de sortie
+        self._open_log_file()
+
+        # 0) Activer les optimisations vitesse (rendu parallèle, cache WMS étendu)
+        self._apply_speed_optimizations()
+        try:
+            return self._export_impl(w_mm, h_mm)
+        finally:
+            self._restore_settings()
+            # Sécurité : couper le NetworkMonitor même en cas d'exception
+            if hasattr(self, '_netmon') and self._netmon:
+                try:
+                    self._netmon.stop()
+                except Exception:
+                    pass
+
+    def _export_impl(self, w_mm, h_mm):
+        """Implémentation interne de l'export (séparée pour try/finally propre)."""
+        t_global = time.perf_counter()
+
+        # ── Démarrer la surveillance réseau ──
+        self._netmon = NetworkMonitor()
+        self._netmon.start()
+
+        self._log("═══════════════════════════════════════════════════════")
+        self._log(f"   Export PDF — démarré à {time.strftime('%H:%M:%S')}")
+        self._log("═══════════════════════════════════════════════════════")
+        self._log_system_info()
+
+        # 1) Nombre de feuillets
         self._progress(70)
-        atlas_refs = self._atlas_ref_order()
-        num_sheets = len(atlas_refs)
+        self._step_start("Indexation atlas")
+        atlas = self.layout.atlas()
+        atlas.updateFeatures()
+        num_sheets = atlas.count()
+        self._step_end(f"{num_sheets} feuillet(s)")
+
+        # Logs détaillés une fois num_sheets connu
+        self._log_export_params(w_mm, h_mm, num_sheets)
+        self._log_project_info()
+        self._log_layer_inventory()
 
         # 2) Page de garde
         self._progress(72)
-        self._log("Page de garde", os.path.join(self.output_dir, '_cover.pdf'))
+        self._step_start("Page de garde")
+        snap = self._netmon.snapshot()
         cover_pdf = self._generate_cover(w_mm, h_mm, num_sheets)
+        self._step_end(self._netmon.delta_str(snap))
 
         # 3) Index (si données disponibles)
         index_pdf = None
         index_pages = 0
 
         if self.index_data:
-            self._log("Index géographique", os.path.join(self.output_dir, '_index.pdf'))
+            self._step_start("Index géographique")
+            snap = self._netmon.snapshot()
             result = self._generate_index(w_mm, h_mm, {})
             if result:
                 index_pdf, index_pages = result
-
-        # Calculer ref_page_map pour les signets PDF
-        offset = 1 + index_pages + 1  # couverture + index + plan d'ensemble
-        ref_page_map = {}
-        for i, ref in enumerate(atlas_refs):
-            ref_page_map[ref] = offset + i
+            self._step_end(f"{index_pages} page(s) — {self._netmon.delta_str(snap)}")
 
         self._progress(74)
 
         # 4) Plan d'ensemble
-        self._log("Plan d'ensemble", os.path.join(self.output_dir, '_overview.pdf'))
+        self._step_start("Plan d'ensemble")
+        snap = self._netmon.snapshot()
         overview_pdf = self._generate_overview(w_mm, h_mm)
+        self._step_end(self._netmon.delta_str(snap))
         self._progress(76)
 
-        # 5) Pages atlas (le plus long — optimisé avec throttle + simplify)
+        # 5) Pages atlas (le plus long)
+        self._step_start(f"Feuillets atlas ({num_sheets} pages)")
+        snap = self._netmon.snapshot()
+        t_atlas = time.perf_counter()
         atlas_pdfs = self._export_atlas_pages()
+        per_sheet = (time.perf_counter() - t_atlas) / max(1, num_sheets)
+        self._step_end(f"moy {self._fmt_dur(per_sheet)}/feuillet — "
+                       f"{self._netmon.delta_str(snap)}")
+
+        # Calculer ref_page_map APRÈS l'export (refs collectées ou cachées)
+        atlas_refs = self._atlas_ref_order()
+        offset = 1 + index_pages + 1
+        ref_page_map = {ref: offset + i for i, ref in enumerate(atlas_refs)}
 
         # 6) Page blanche
         self._progress(96)
@@ -781,7 +1253,8 @@ class PdfExporter:
 
         # 7) Fusionner
         self._progress(97)
-        self._log("Fusion PDF", os.path.join(self.output_dir, 'atlas_complet.pdf'))
+        n_files = len(atlas_pdfs) + 2 + (1 if index_pdf else 0) + 1
+        self._step_start(f"Fusion PDF ({n_files} fichiers)")
         all_pdfs = [cover_pdf]
         if index_pdf:
             all_pdfs.append(index_pdf)
@@ -791,6 +1264,11 @@ class PdfExporter:
 
         output_path = os.path.join(self.output_dir, 'atlas_complet.pdf')
         merged = self._merge_pdfs(all_pdfs, output_path, ref_page_map)
+        # Taille du PDF final
+        size_str = ""
+        if merged and os.path.exists(merged):
+            size_str = f"taille : {_fmt_bytes(os.path.getsize(merged))}"
+        self._step_end(size_str)
 
         # Nettoyage des fichiers temporaires seulement si le merge a réussi
         if merged:
@@ -803,8 +1281,51 @@ class PdfExporter:
         else:
             self._log("Fusion impossible — fichiers PDF séparés conservés.")
 
+        # ── Récapitulatif global ──
+        total = time.perf_counter() - t_global
+        self._log("═══════════════════════════════════════════════════════")
+        self._log(f"   Export terminé en {self._fmt_dur(total)}")
+        if getattr(self, '_log_path', None):
+            self._log(f"   Log complet : {self._log_path}")
+        self._log("═══════════════════════════════════════════════════════")
+        self._log("┌─ Statistiques réseau (total) ──")
+        for line in self._netmon.summary().splitlines():
+            self._log(f"│ {line[2:] if line.startswith('  ') else line}")
+        self._log("└──")
+        # Conseils auto selon les stats
+        self._log_perf_hints(total, num_sheets)
+
+        self._netmon.stop()
         self._progress(100)
         return merged or self.output_dir
+
+    def _log_perf_hints(self, total_seconds, num_sheets):
+        """Conseils auto basés sur les stats observées."""
+        hints = []
+        per_sheet = total_seconds / max(1, num_sheets)
+        nm = self._netmon
+
+        if per_sheet > 30:
+            hints.append("⚠ +30s/feuillet : envisager DPI plus bas ou cache WMS persistant")
+        if nm.errors > 0:
+            hints.append(f"⚠ {nm.errors} erreurs réseau : serveur WMS instable ou timeout")
+        if nm.from_cache == 0 and nm.requests > 50:
+            hints.append("⚠ Aucune réponse en cache : QGIS retélécharge tout — "
+                         "vérifier /cache/size dans Préférences > Réseau")
+        if nm.bytes_total > 100 * 1024 * 1024:
+            hints.append(f"⚠ {_fmt_bytes(nm.bytes_total)} téléchargés : "
+                         "DPI probablement trop élevé pour les couches WMS")
+        # Hôtes les plus utilisés
+        if nm.hosts:
+            slow_hosts = [h for h, n in nm.hosts.items() if n > 20]
+            if slow_hosts:
+                hints.append(f"ℹ Hôte le plus sollicité : {slow_hosts[0]} — "
+                             f"vérifier sa latence ping")
+        if hints:
+            self._log("┌─ Conseils d'optimisation ──")
+            for h in hints:
+                self._log(f"│ {h}")
+            self._log("└──")
 
     # ---------------------------------------------------------------- utils
     @staticmethod

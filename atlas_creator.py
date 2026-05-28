@@ -1,7 +1,6 @@
 from qgis.core import (
     QgsProject, QgsPrintLayout, QgsLayoutItemMap, QgsLayoutItemLabel,
     QgsLayoutPoint, QgsLayoutSize, QgsUnitTypes, QgsTextFormat,
-    QgsCoordinateReferenceSystem
 )
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QFont, QColor

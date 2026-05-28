@@ -148,16 +148,19 @@ class GridGenerator:
             self.layer.crs(), self.crs, QgsProject.instance()
         )
 
+        # Itérateur direct (pas de list()) : évite de charger toutes les
+        # features en RAM d'un coup — gain important sur 10 000+ conduites
         if self.extent_mode == 3 and self.layer.selectedFeatureCount() > 0:
             features = self.layer.selectedFeatures()
         else:
-            features = list(self.layer.getFeatures())
+            features = self.layer.getFeatures()
 
         geoms = {}
         spatial_index = QgsSpatialIndex()
 
         for i, feat in enumerate(features):
-            geom = QgsGeometry(feat.geometry())
+            # feat.geometry() retourne déjà une copie — pas besoin de QgsGeometry(...)
+            geom = feat.geometry()
             geom.transform(transform)
             temp_feat = QgsFeature()
             temp_feat.setId(i)
@@ -233,10 +236,17 @@ class GridGenerator:
                 y2 = y1 - cell_h
 
                 rect = QgsRectangle(x1, y2, x2, y1)
-                rect_geom = QgsGeometry.fromRect(rect)
 
-                # Test d'intersection via l'index spatial
+                # Pré-test bbox SANS créer de QgsGeometry (objet lourd) :
+                # spatial_index.intersects() accepte directement un QgsRectangle.
+                # Si aucun candidat, on passe à la cellule suivante sans allouer
+                # d'objet géométrie → gain important pour les grandes grilles creuses.
                 candidates = spatial_index.intersects(rect)
+                if not candidates:
+                    continue
+
+                # On crée le QgsGeometry seulement si des candidats existent
+                rect_geom = QgsGeometry.fromRect(rect)
                 intersects = False
                 for idx in candidates:
                     if rect_geom.intersects(conduite_geoms[idx]):
@@ -263,14 +273,20 @@ class GridGenerator:
         save_dir = output_dir if output_dir else tempfile.mkdtemp(prefix='atlas_')
         output_path = os.path.join(save_dir, 'grille_feuillets.geojson')
 
+        # Sauvegarder le GeoJSON (pour export/log), mais retourner directement
+        # la couche mémoire déjà prête → évite la relecture disque (double I/O).
         self._save_geojson(grid_layer, output_path)
 
-        # Recharger depuis le fichier
+        # La couche mémoire est déjà valide et peuplée : on la retourne directement.
+        # Fallback vers le fichier seulement si la couche mémoire est vide.
+        if grid_layer.isValid() and grid_layer.featureCount() > 0:
+            return grid_layer
+
+        # Fallback : recharger depuis le fichier si la couche mémoire est invalide
         saved_layer = QgsVectorLayer(output_path, 'Grille feuillets', 'ogr')
         if saved_layer.isValid():
             return saved_layer
 
-        # Fallback : couche mémoire si la relecture échoue
         return grid_layer
 
     def _save_geojson(self, layer, path):
