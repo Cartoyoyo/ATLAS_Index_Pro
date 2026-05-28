@@ -4,7 +4,7 @@ import time
 import platform
 import tempfile
 from datetime import date
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 from qgis.core import (
     QgsLayoutExporter, QgsProject, QgsPrintLayout, QgsLayoutItemMap,
@@ -227,7 +227,6 @@ def _extract_wms_url(layer):
         src = layer.source()
         for part in src.split('&'):
             if part.lower().startswith('url='):
-                from urllib.parse import unquote
                 return unquote(part[4:])[:120]
     except Exception:
         pass
@@ -299,28 +298,38 @@ class PdfExporter:
         self._log_to_file(msg)
 
     def _log_to_file(self, msg):
-        """Append au fichier atlas_log.txt dans output_dir.
-        Le fichier est créé/vidé au début de l'export (_open_log_file).
-        """
-        if not getattr(self, '_log_path', None):
+        """Append au fichier log (handle ouvert pendant tout l'export)."""
+        fh = getattr(self, '_log_fh', None)
+        if fh is None:
             return
         try:
-            with open(self._log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+            fh.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+            fh.flush()
         except OSError:
             pass
 
     def _open_log_file(self):
-        """Initialise le fichier log dans output_dir."""
+        """Ouvre le fichier log et le garde ouvert jusqu'à _close_log_file()."""
         try:
-            self._log_path = os.path.join(self.output_dir, 'atlas_log.txt')
-            with open(self._log_path, 'w', encoding='utf-8') as f:
-                f.write(f"=== ATLAS Index Pro — export log ===\n")
-                f.write(f"Date : {date.today().isoformat()} "
-                        f"{time.strftime('%H:%M:%S')}\n")
-                f.write(f"Sortie : {self.output_dir}\n\n")
+            log_path = os.path.join(self.output_dir, 'atlas_log.txt')
+            self._log_fh = open(log_path, 'w', encoding='utf-8')
+            self._log_fh.write(f"=== ATLAS Index Pro — export log ===\n")
+            self._log_fh.write(f"Date : {date.today().isoformat()} "
+                               f"{time.strftime('%H:%M:%S')}\n")
+            self._log_fh.write(f"Sortie : {self.output_dir}\n\n")
+            self._log_fh.flush()
         except OSError:
-            self._log_path = None
+            self._log_fh = None
+
+    def _close_log_file(self):
+        """Ferme le handle log ouvert par _open_log_file()."""
+        fh = getattr(self, '_log_fh', None)
+        if fh:
+            try:
+                fh.close()
+            except OSError:
+                pass
+            self._log_fh = None
 
     # ---------------------------------------------------------------- timing
     def _step_start(self, label):
@@ -352,7 +361,6 @@ class PdfExporter:
     def _log_system_info(self):
         """Inventaire système / QGIS / projet — utile pour identifier le contexte."""
         try:
-            import os as _os
             try:
                 qgis_ver = Qgis.QGIS_VERSION
             except Exception:
@@ -361,7 +369,7 @@ class PdfExporter:
             self._log("┌─ Contexte système ──")
             self._log(f"│  QGIS              : {qgis_ver}")
             self._log(f"│  OS                : {platform.system()} {platform.release()}")
-            self._log(f"│  CPU               : {_os.cpu_count() or '?'} cœurs")
+            self._log(f"│  CPU               : {os.cpu_count() or '?'} cœurs")
             self._log(f"│  Rendu parallèle   : {s.value('/qgis/parallel_rendering', True, bool)}")
             self._log(f"│  Threads max       : {s.value('/qgis/max_threads', -1, int)}")
             cache = s.value('/cache/size', 50 * 1024 * 1024, int)
@@ -410,13 +418,12 @@ class PdfExporter:
                     wms_count += 1
                     url = _extract_wms_url(layer)
                     self._log(f"│       ↳ {url}")
-                    # Format de tuile si dispo
                     try:
                         src = layer.source()
-                        for key in ('format=', 'tileMatrixSet=', 'crs='):
-                            for part in src.split('&'):
-                                if part.lower().startswith(key):
-                                    self._log(f"│       ↳ {part}")
+                        keys = ('format=', 'tilematrixset=', 'crs=')
+                        for part in src.split('&'):
+                            if part.lower().startswith(keys):
+                                self._log(f"│       ↳ {part}")
                     except Exception:
                         pass
             if wms_count:
@@ -451,7 +458,7 @@ class PdfExporter:
         refs = []
         for i in range(atlas.count()):
             atlas.seekTo(i)
-            feat = atlas.coverageLayer().getFeature(atlas.currentFeatureNumber())
+            feat = atlas.currentFeature()
             ref = feat['reference'] if feat.isValid() else f"P{i+1}"
             refs.append(ref)
         self._cached_refs = refs
@@ -847,8 +854,7 @@ class PdfExporter:
         # Rendu parallèle activé (téléchargement WMS multi-thread)
         s.setValue("/qgis/parallel_rendering", True)
         # Plafonner à 8 threads max (au-delà : saturation serveur WMS)
-        import os as _os
-        cpu = _os.cpu_count() or 4
+        cpu = os.cpu_count() or 4
         s.setValue("/qgis/max_threads", min(8, cpu))
         # Cache réseau 500 Mo (vs 50 Mo par défaut) → réutilise les tuiles
         # WMS entre l'overview et les feuillets atlas
@@ -919,7 +925,7 @@ class PdfExporter:
             path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
             self._tmp_files.append(path)
 
-            feat = atlas.coverageLayer().getFeature(atlas.currentFeatureNumber())
+            feat = atlas.currentFeature()
             ref = feat['reference'] if feat.isValid() else f"P{i+1}"
             refs.append(ref)
 
@@ -953,13 +959,16 @@ class PdfExporter:
         """Fusionne les PDF. Tente pypdf, PyPDF2, puis fallback pur Python."""
         try:
             return self._merge_pypdf(pdf_list, output_path, ref_page_map)
-        except (ImportError, Exception):
+        except ImportError:
             pass
+        except Exception as e:
+            self._log(f"   ↳ pypdf : erreur merge ({e}), tentative PyPDF2…")
         try:
             return self._merge_pypdf2(pdf_list, output_path, ref_page_map)
-        except (ImportError, Exception):
+        except ImportError:
             pass
-        # Fallback pur Python — zéro dépendance, fonctionne partout
+        except Exception as e:
+            self._log(f"   ↳ PyPDF2 : erreur merge ({e}), fallback natif…")
         return self._merge_native(pdf_list, output_path)
 
     def _merge_native(self, pdf_list, output_path):
@@ -1172,7 +1181,7 @@ class PdfExporter:
             return self._export_impl(w_mm, h_mm)
         finally:
             self._restore_settings()
-            # Sécurité : couper le NetworkMonitor même en cas d'exception
+            self._close_log_file()
             if hasattr(self, '_netmon') and self._netmon:
                 try:
                     self._netmon.stop()
@@ -1285,8 +1294,8 @@ class PdfExporter:
         total = time.perf_counter() - t_global
         self._log("═══════════════════════════════════════════════════════")
         self._log(f"   Export terminé en {self._fmt_dur(total)}")
-        if getattr(self, '_log_path', None):
-            self._log(f"   Log complet : {self._log_path}")
+        if getattr(self, '_log_fh', None):
+            self._log(f"   Log complet : {self._log_fh.name}")
         self._log("═══════════════════════════════════════════════════════")
         self._log("┌─ Statistiques réseau (total) ──")
         for line in self._netmon.summary().splitlines():
