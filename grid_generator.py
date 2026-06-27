@@ -4,9 +4,8 @@ import tempfile
 import warnings
 from qgis.core import (
     QgsVectorLayer, QgsFeature, QgsGeometry, QgsRectangle,
-    QgsField, QgsFields, QgsCoordinateTransform, QgsProject,
-    QgsCoordinateReferenceSystem, QgsVectorFileWriter,
-    QgsWkbTypes, QgsSpatialIndex
+    QgsField, QgsCoordinateTransform, QgsProject,
+    QgsVectorFileWriter, QgsSpatialIndex
 )
 from qgis.PyQt.QtCore import QVariant
 

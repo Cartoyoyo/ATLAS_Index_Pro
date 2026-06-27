@@ -5,10 +5,8 @@ import logging
 from urllib.request import urlopen, Request
 from qgis.core import (
     QgsCoordinateTransform, QgsProject, QgsCoordinateReferenceSystem,
-    QgsSpatialIndex, QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-    QgsField
+    QgsSpatialIndex, QgsFeature, QgsGeometry, QgsPointXY
 )
-from qgis.PyQt.QtCore import QVariant
 
 # L'API BAN /reverse/csv/ accepte max ~10 000 lignes par requête.
 # On découpe en lots pour rester sous la limite et éviter les timeouts.
@@ -41,6 +39,13 @@ class Geocoder:
         return self._from_field()
 
     # ---------------------------------------------------------------- utils
+    def _safe_urlopen(self, req, timeout):
+        """Rejects any URL that is not HTTPS to prevent file:/ or custom-scheme access."""
+        url = req.full_url if isinstance(req, Request) else str(req)
+        if not url.lower().startswith('https://'):
+            raise ValueError(f"Rejected non-HTTPS URL: {url}")
+        return urlopen(req, timeout=timeout)  # nosec B310
+
     def _to_wgs84(self, layer):
         return QgsCoordinateTransform(
             layer.crs(),
@@ -93,14 +98,14 @@ class Geocoder:
                     'Content-Type': 'application/x-www-form-urlencoded',
                 }
             )
-            data = json.loads(urlopen(req, timeout=35).read().decode('utf-8'))
+            data = json.loads(self._safe_urlopen(req, timeout=35).read().decode('utf-8'))
         except Exception as e:
             logging.getLogger('ATLAS_Index_Pro').warning(f"OSM Overpass request failed: {e}")
             return []
 
         roads = []
         for elem in data.get('elements', []):
-            name   = elem.get('tags', {}).get('name')
+            name = elem.get('tags', {}).get('name')
             center = elem.get('center')
             if name and center:
                 roads.append((name, center['lat'], center['lon']))
@@ -181,7 +186,7 @@ class Geocoder:
 
         result = {}
         try:
-            resp = urlopen(req, timeout=60).read().decode('utf-8')
+            resp = self._safe_urlopen(req, timeout=60).read().decode('utf-8')
             reader = csv.DictReader(io.StringIO(resp))
             for row in reader:
                 fid = int(row['fid'])

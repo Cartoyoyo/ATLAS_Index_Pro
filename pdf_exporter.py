@@ -2,7 +2,6 @@ import os
 import math
 import time
 import platform
-import tempfile
 from datetime import date
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -16,9 +15,9 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QMarginsF, QSizeF, Qt, QSettings, QUrl
 from qgis.PyQt.QtGui import QTextDocument, QPainter, QFont, QColor
 try:
-    from qgis.PyQt.QtGui import QPageSize, QPageLayout
+    from qgis.PyQt.QtGui import QPageSize
 except ImportError:
-    from qgis.PyQt.QtCore import QPageSize, QPageLayout
+    from qgis.PyQt.QtCore import QPageSize
 from qgis.PyQt.QtPrintSupport import QPrinter
 from qgis.PyQt.QtWidgets import QApplication
 
@@ -557,7 +556,11 @@ class PdfExporter:
 
         # Construire les lignes du tableau 4 colonnes
         rows_html = ''
+<<<<<<< HEAD
         sep = f'border-left:1px solid #ccc;'
+=======
+        sep = 'border-left:10px solid #ccc;'
+>>>>>>> 10071c5 (fix: resolve all Bandit and flake8 warnings (security + code quality))
         for i in range(half):
             # Colonne gauche
             street_l, refs_l = col_left[i]
@@ -656,6 +659,7 @@ class PdfExporter:
         map_item.attemptResize(QgsLayoutSize(
             map_w, map_h, QgsUnitTypes.LayoutMillimeters
         ))
+<<<<<<< HEAD
         # Plan d'ensemble : fond OSM + grille uniquement
         osm_layer = next(
             (l for l in project.mapLayers().values()
@@ -677,6 +681,17 @@ class PdfExporter:
 
         map_item.setKeepLayerSet(True)
         map_item.setLayers(overview_layers)
+=======
+        # Fixer explicitement les couches visibles (le layout temporaire
+        # ne résout pas les couches raster/tuiles comme OSM sinon)
+        root = project.layerTreeRoot()
+        visible_layers = [
+            node.layer() for node in root.findLayers()
+            if node.isVisible() and node.layer() is not None
+        ]
+        map_item.setKeepLayerSet(True)
+        map_item.setLayers(visible_layers)
+>>>>>>> 10071c5 (fix: resolve all Bandit and flake8 warnings (security + code quality))
 
         # Emprise = grille entière, ajustée au ratio du cadre carte
         extent = self.grid_layer.extent()
@@ -717,7 +732,7 @@ class PdfExporter:
         # ── Étiquettes centrées occupant 80% du cadre ──
         from qgis.core import (
             QgsPalLayerSettings, QgsVectorLayerSimpleLabeling,
-            QgsTextFormat, QgsProperty, QgsPropertyDefinition
+            QgsTextFormat, QgsProperty
         )
         # Sauvegarder l'étiquetage actuel (clone avant remplacement)
         old_labeling = self.grid_layer.labeling().clone() if self.grid_layer.labeling() else None

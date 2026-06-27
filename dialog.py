@@ -1,13 +1,12 @@
 import os
 import logging
-from datetime import datetime
 from pathlib import Path
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QRadioButton, QPushButton, QSpinBox, QDoubleSpinBox,
     QProgressBar, QFileDialog, QLineEdit, QButtonGroup, QMessageBox,
     QDialogButtonBox, QApplication, QFormLayout, QFrame, QWidget, QCheckBox,
-    QScrollArea, QStackedWidget
+    QStackedWidget
 )
 from qgis.PyQt.QtCore import Qt, QTimer, QEventLoop
 from qgis.PyQt.QtGui import QFont, QIcon
@@ -354,15 +353,22 @@ class AboutDialog(QDialog):
     """Modal dialog showing plugin info: logo, license and GitHub link."""
 
     _ABOUT_TR = {
-        'title':  {'fr': "À propos",  'en': "About",     'es': "Acerca de",
-                    'pt': "Sobre",     'de': "Über"},
-        'close':  {'fr': "Fermer",    'en': "Close",     'es': "Cerrar",
-                    'pt': "Fechar",    'de': "Schließen"},
+        'title': {
+            'fr': "À propos", 'en': "About", 'es': "Acerca de",
+            'pt': "Sobre", 'de': "Über"
+        },
+        'close': {
+            'fr': "Fermer", 'en': "Close", 'es': "Cerrar",
+            'pt': "Fechar", 'de': "Schließen"
+        },
     }
 
     def __init__(self, lang='fr', parent=None):
         super().__init__(parent)
-        tr = lambda k: self._ABOUT_TR[k].get(lang, self._ABOUT_TR[k]['en'])
+
+        def tr(k):
+            return self._ABOUT_TR[k].get(lang, self._ABOUT_TR[k]['en'])
+
         self.setWindowTitle(tr('title'))
         self.setFixedWidth(420)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -980,6 +986,7 @@ class AtlasDialog(QDialog):
         self.btn_next.setText(self.tr('btn_next'))
         self.btn_prev.setText(self.tr('btn_prev'))
         self._update_nav()
+
     # -------------------------------------------------------- slots
     def _show_about(self):
         dlg = AboutDialog(lang=self.lang, parent=self)
@@ -1413,7 +1420,10 @@ class AtlasDialog(QDialog):
         try:
             # ── Étape 0 : Génération de la grille ──
             if self._step == 0:
-                grid_path = os.path.join(ctx['out_dir'], 'grille_feuillets.geojson') if ctx['out_dir'] else 'grille_feuillets.geojson'
+                grid_path = (
+                    os.path.join(ctx['out_dir'], 'grille_feuillets.geojson')
+                    if ctx['out_dir'] else 'grille_feuillets.geojson'
+                )
                 self._log(self.tr('st_grid'), grid_path)
                 self._set_progress(2, pulse_range=20)
 

@@ -2,7 +2,7 @@ import os
 import math
 from qgis.core import (
     QgsCoordinateTransform, QgsProject, QgsGeometry,
-    QgsSpatialIndex, QgsFeature
+    QgsSpatialIndex
 )
 
 
