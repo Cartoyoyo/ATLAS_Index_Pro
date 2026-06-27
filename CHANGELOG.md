@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [3.0.2] - 2026-06-27
+
+### Fixed
+- **Security**: `geocoder.py` — new `_safe_urlopen()` helper rejects any non-HTTPS URL before opening a network connection (Bandit B310).
+- **Code quality**: removed unused imports across 7 files (`QgsCoordinateReferenceSystem`, `QgsVectorLayer`, `QgsField`, `QVariant`, `QgsFields`, `QgsWkbTypes`, `QgsFeature`, `tempfile`, `QgsTextFormat`, `QMarginsF`, `QPageLayout`, `QgsPropertyDefinition`, `datetime`, `QScrollArea`).
+- Fixed bare f-string without placeholder (`pdf_exporter.py`), lambda assignment replaced by `def` (`dialog.py`), alignment and line-length issues.
+
+---
+
 ## [3.0.0] - 2026-03-21
 
 ### Added
