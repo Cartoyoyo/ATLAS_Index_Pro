@@ -7,7 +7,7 @@
 **Générateur de feuillets atlas pour QGIS — avec index géographique et export PDF complet**
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.16%2B-green?logo=qgis&logoColor=white)](https://qgis.org)
-[![Version](https://img.shields.io/badge/version-3.0.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL%20v3-orange)](LICENSE)
 [![Languages](https://img.shields.io/badge/languages-FR%20%7C%20EN%20%7C%20ES%20%7C%20PT%20%7C%20DE-purple)](README.md)
 
@@ -46,6 +46,8 @@ Fini les mises en page manuelles : définissez votre emprise, choisissez votre f
 - **Géocodage intégré** : recherche et localisation d'adresses dans l'interface
 - **Outils de sélection** : lasso et rectangle pour sélectionner des objets directement sur la carte
 - **Paramètres avancés** : recouvrement des feuillets, marge autour des objets, résolution DPI
+- **Correction couverture WMS** : détecte une couche orthophoto précachée limitée en échelle et configure automatiquement sa variante haute résolution pour les échelles fines
+- **Export atlas rapide** : feuillets rendus par lots concurrents, gain de vitesse important sur les projets avec fonds WMS
 - **Interface multilingue** : basculez entre FR / EN / ES / PT / DE sans redémarrer
 
 ### Installation
@@ -112,6 +114,8 @@ No more manual print layouts: define your extent, choose your paper format and s
 - **Built-in geocoder**: address search and location within the interface
 - **Selection tools**: lasso and rectangle to select features directly on the map
 - **Advanced settings**: sheet overlap, object margin, DPI resolution
+- **WMS coverage fix**: detects a scale-limited pre-cached WMS orthophoto layer and automatically configures its high-resolution sibling for fine scales
+- **Fast atlas export**: sheets rendered in concurrent batches — major speedup on WMS-heavy projects
 - **Multilingual interface**: switch between FR / EN / ES / PT / DE without restarting
 
 ### Installation
@@ -235,12 +239,19 @@ No more manual print layouts: define your extent, choose your paper format and s
 
 ---
 
+## Architecture
+
+Le pipeline complet (grille → géocodage → index → mise en page → export PDF, y compris le rendu parallèle des feuillets atlas) est documenté dans [`docs/architecture.puml`](docs/architecture.puml) (diagramme PlantUML).
+
+---
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 | Version | Notes |
 |---------|-------|
+| **3.1.0** | Correction crash export atlas — Outil correction couverture WMS — Export atlas parallélisé (rendu par lots, couches clonées) — Texte natif dans les PDF |
 | **3.0.1** | Corrections mineures — Stabilité améliorée |
 | **3.0.0** | 24 corrections — Fusion PDF universelle sans dépendance externe — Optimisation performance — Titre colonne index dynamique — DPI 150 par défaut — Licence GPL v3 |
 | **2.0.0** | Renommé ATLAS Index Pro — Export PDF complet (garde, index, plan, feuillets) — Liens hypertexte — Plan d'ensemble — Interface 5 langues — Paramètre DPI |

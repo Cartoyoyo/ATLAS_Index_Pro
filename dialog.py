@@ -212,6 +212,30 @@ TR = {
         'fr': "Aucun feuillet ne contient d'objet.",  'en': "No sheet contains any object.",
         'es': "Ninguna hoja contiene objetos.",       'pt': "Nenhuma folha contém objetos.",
         'de': "Kein Blatt enthält Objekte."},
+    'warn_index_empty': {
+        'fr': "L'index géographique n'a pas pu être créé "
+              "(échec de récupération des noms de rues — BAN/OSM indisponible ou "
+              "requête en erreur). Voulez-vous réessayer, continuer sans index, "
+              "ou annuler ?",
+        'en': "The geographic index could not be created "
+              "(street name lookup failed — BAN/OSM unavailable or request error). "
+              "Retry, continue without an index, or cancel?",
+        'es': "No se pudo crear el índice geográfico "
+              "(fallo al obtener nombres de calles — BAN/OSM no disponible o error). "
+              "¿Reintentar, continuar sin índice o cancelar?",
+        'pt': "Não foi possível criar o índice geográfico "
+              "(falha ao obter nomes de ruas — BAN/OSM indisponível ou erro). "
+              "Tentar novamente, continuar sem índice ou cancelar?",
+        'de': "Das geografische Verzeichnis konnte nicht erstellt werden "
+              "(Straßennamen-Abfrage fehlgeschlagen — BAN/OSM nicht erreichbar oder Fehler). "
+              "Erneut versuchen, ohne Verzeichnis fortfahren oder abbrechen?"},
+    'btn_retry': {
+        'fr': "Réessayer",       'en': "Retry",
+        'es': "Reintentar",      'pt': "Tentar novamente", 'de': "Erneut versuchen"},
+    'btn_continue_no_index': {
+        'fr': "Continuer sans index",     'en': "Continue without index",
+        'es': "Continuar sin índice",     'pt': "Continuar sem índice",
+        'de': "Ohne Verzeichnis fortfahren"},
     'dlg_pick_dir': {
         'fr': "Répertoire de sortie",  'en': "Output directory",
         'es': "Directorio de salida",  'pt': "Diretório de saída",
@@ -1486,6 +1510,26 @@ class AtlasDialog(QDialog):
                     )
                     _, ctx['sorted_index'] = idx.generate(ctx['out_dir'])
 
+                    if not ctx['sorted_index']:
+                        self._log(self.tr('warn_index_empty'))
+                        msg = QMessageBox(QMessageBox.Warning, self.tr('title_warning'),
+                                           self.tr('warn_index_empty'),
+                                           QMessageBox.NoButton, self)
+                        btn_retry = msg.addButton(self.tr('btn_retry'), QMessageBox.YesRole)
+                        btn_skip = msg.addButton(self.tr('btn_continue_no_index'),
+                                                  QMessageBox.NoRole)
+                        msg.addButton(QMessageBox.Cancel)
+                        msg.exec_()
+                        clicked = msg.clickedButton()
+                        if clicked == btn_retry:
+                            self._step = 1
+                            self._next_step()
+                            return
+                        elif clicked != btn_skip:
+                            self._log(self.tr('st_cancelled'))
+                            self._generation_cleanup()
+                            return
+
                 self._set_progress(65)
                 self._step = 3
                 self._next_step()
@@ -1739,6 +1783,48 @@ class _AdvancedDialog(QDialog):
         row.addWidget(self.combo_lang, 0, Qt.AlignVCenter)
         main.addWidget(card)
 
+        # --- Carte couverture WMS (détection couche non précachée) ---
+        card = QFrame()
+        card.setStyleSheet(self._CARD_STYLE)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(14, 12, 14, 12)
+        row.setSpacing(12)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(3)
+        lbl = QLabel({
+            'fr': "Couverture WMS", 'en': "WMS coverage",
+            'es': "Cobertura WMS", 'pt': "Cobertura WMS", 'de': "WMS-Abdeckung"
+        }.get(lang, "Couverture WMS"))
+        lbl.setStyleSheet("font-weight: bold; font-size: 9pt; border: none; background: transparent;")
+        desc = QLabel({
+            'fr': "Détecte une couche WMS précachée limitée en échelle et "
+                  "ajoute/configure automatiquement sa variante non précachée "
+                  "pour les échelles plus fines (ex. orthophoto CRAIG).",
+            'en': "Detects a scale-limited pre-cached WMS layer and "
+                  "automatically adds/configures its non-cached variant for "
+                  "finer scales.",
+        }.get(lang, "Détecte une couche WMS précachée limitée en échelle."))
+        desc.setStyleSheet("color: #777; font-size: 8pt; border: none; background: transparent;")
+        desc.setWordWrap(True)
+        text_col.addWidget(lbl)
+        text_col.addWidget(desc)
+
+        btn_wms_fix = QPushButton({
+            'fr': "Corriger", 'en': "Fix", 'es': "Corregir",
+            'pt': "Corrigir", 'de': "Beheben"
+        }.get(lang, "Corriger"))
+        btn_wms_fix.setStyleSheet(
+            "QPushButton { border:1px solid #c8cdd5; border-radius:5px;"
+            " padding:6px 14px; font-size:9pt; }"
+            "QPushButton:hover { background:#eaf2f8; border-color:#2980b9; }"
+        )
+        btn_wms_fix.clicked.connect(self._fix_wms_coverage)
+
+        row.addLayout(text_col, 1)
+        row.addWidget(btn_wms_fix, 0, Qt.AlignVCenter)
+        main.addWidget(card)
+
         # Séparateur
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -1762,6 +1848,12 @@ class _AdvancedDialog(QDialog):
         main.addWidget(bb)
 
         self.setLayout(main)
+
+    def _fix_wms_coverage(self):
+        from .wms_ortho_fix import fix_ortho_coverage
+        main_dlg = self.parent()
+        iface = getattr(main_dlg, 'iface', None)
+        fix_ortho_coverage(iface, self)
 
 
 # Alias pour compatibilité avec plugin.py si nécessaire

@@ -10,9 +10,9 @@ from qgis.core import (
     QgsLayoutItemLabel, QgsLayoutItemScaleBar, QgsLayoutPoint,
     QgsLayoutSize, QgsUnitTypes, QgsRectangle, QgsTextFormat,
     QgsLayoutRenderContext, QgsRasterLayer, QgsVectorLayer,
-    QgsNetworkAccessManager, Qgis
+    QgsNetworkAccessManager, Qgis, QgsMapSettings, QgsMapRendererParallelJob
 )
-from qgis.PyQt.QtCore import QMarginsF, QSizeF, Qt, QSettings, QUrl
+from qgis.PyQt.QtCore import QMarginsF, QSizeF, QSize, QRect, Qt, QSettings, QUrl
 from qgis.PyQt.QtGui import QTextDocument, QPainter, QFont, QColor
 try:
     from qgis.PyQt.QtGui import QPageSize
@@ -449,17 +449,22 @@ class PdfExporter:
     def _atlas_ref_order(self):
         """Retourne la liste ordonnée des références atlas (ordre des feuillets).
         Utilise le cache si déjà calculé (évite double itération).
+
+        Lit directement la couche grille plutôt que de piloter l'atlas via
+        seekTo() : la carte du layout est atlas-driven, donc chaque seekTo()
+        déclenche un rendu (et une requête WMS) en arrière-plan pour cette
+        emprise — un balayage complet des feuillets juste pour lire un
+        attribut lançait ainsi des dizaines de requêtes WMS parasites avant
+        même le début de l'export réel.
         """
         if hasattr(self, '_cached_refs'):
             return self._cached_refs
         atlas = self.layout.atlas()
         atlas.updateFeatures()
-        refs = []
-        for i in range(atlas.count()):
-            atlas.seekTo(i)
-            feat = atlas.currentFeature()
-            ref = feat['reference'] if feat.isValid() else f"P{i+1}"
-            refs.append(ref)
+
+        refs = [f['reference'] if f.isValid() else f"P{i+1}"
+                for i, f in enumerate(self.grid_layer.getFeatures())]
+
         self._cached_refs = refs
         return refs
 
@@ -556,11 +561,7 @@ class PdfExporter:
 
         # Construire les lignes du tableau 4 colonnes
         rows_html = ''
-<<<<<<< HEAD
-        sep = f'border-left:1px solid #ccc;'
-=======
         sep = 'border-left:10px solid #ccc;'
->>>>>>> 10071c5 (fix: resolve all Bandit and flake8 warnings (security + code quality))
         for i in range(half):
             # Colonne gauche
             street_l, refs_l = col_left[i]
@@ -659,7 +660,6 @@ class PdfExporter:
         map_item.attemptResize(QgsLayoutSize(
             map_w, map_h, QgsUnitTypes.LayoutMillimeters
         ))
-<<<<<<< HEAD
         # Plan d'ensemble : fond OSM + grille uniquement
         osm_layer = next(
             (l for l in project.mapLayers().values()
@@ -681,17 +681,6 @@ class PdfExporter:
 
         map_item.setKeepLayerSet(True)
         map_item.setLayers(overview_layers)
-=======
-        # Fixer explicitement les couches visibles (le layout temporaire
-        # ne résout pas les couches raster/tuiles comme OSM sinon)
-        root = project.layerTreeRoot()
-        visible_layers = [
-            node.layer() for node in root.findLayers()
-            if node.isVisible() and node.layer() is not None
-        ]
-        map_item.setKeepLayerSet(True)
-        map_item.setLayers(visible_layers)
->>>>>>> 10071c5 (fix: resolve all Bandit and flake8 warnings (security + code quality))
 
         # Emprise = grille entière, ajustée au ratio du cadre carte
         extent = self.grid_layer.extent()
@@ -830,6 +819,10 @@ class PdfExporter:
                 settings.flags |= QgsLayoutExporter.FlagSimplifyGeometries
             except (AttributeError, TypeError):
                 pass
+            try:
+                settings.textRenderFormat = Qgis.TextRenderFormat.AlwaysText
+            except AttributeError:
+                pass
             # NE PAS activer rasterizeWholeImage : bloque le rendu WMS.
             exporter.exportToPdf(path, settings)
         finally:
@@ -899,67 +892,149 @@ class PdfExporter:
             except AttributeError:
                 pass
 
-    def _make_atlas_settings(self):
-        """Crée les PdfExportSettings communes atlas + overview."""
-        settings = QgsLayoutExporter.PdfExportSettings()
-        settings.dpi = self.dpi
+    def _write_atlas_page_pdf(self, path, img, ref, w_mm, h_mm):
+        """Écrit une page atlas (image de carte pré-rendue + étiquette
+        référence) dans un PDF 1 page, en pleine page (0 marge).
+
+        Reproduit la seule décoration du layout atlas (voir atlas_creator.py) :
+        l'étiquette référence Arial 28 Bold, fond blanc translucide, 40×16mm
+        en bas à droite.
+        """
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setResolution(self.dpi)
+        printer.setOutputFormat(QPrinter.PdfFormat)
+        printer.setOutputFileName(path)
+        printer.setPageSize(QPageSize(QSizeF(w_mm, h_mm), QPageSize.Millimeter))
+        printer.setFullPage(True)
+        printer.setPageMargins(0, 0, 0, 0, QPrinter.Millimeter)
+
+        w_px = max(1, int(w_mm / 25.4 * self.dpi))
+        h_px = max(1, int(h_mm / 25.4 * self.dpi))
+
+        painter = QPainter(printer)
         try:
-            settings.flags |= QgsLayoutExporter.FlagSimplifyGeometries
-        except (AttributeError, TypeError):
-            pass
-        # Laisser QGIS rasteriser les WMS en images embedded (vs vecteur forcé)
-        # → JPEG embedded plus rapide et plus compact que vecteur pour rasters
-        try:
-            settings.forceVectorOutput = False
-        except AttributeError:
-            pass
-        return settings
+            if img is not None and not img.isNull():
+                painter.drawImage(QRect(0, 0, w_px, h_px), img)
+            else:
+                painter.fillRect(QRect(0, 0, w_px, h_px), QColor(255, 255, 255))
+
+            label_w_mm, label_h_mm = 40.0, 16.0
+            rect = QRect(
+                int((w_mm - label_w_mm - 2) / 25.4 * self.dpi),
+                int((h_mm - label_h_mm - 2) / 25.4 * self.dpi),
+                int(label_w_mm / 25.4 * self.dpi),
+                int(label_h_mm / 25.4 * self.dpi),
+            )
+            painter.fillRect(rect, QColor(255, 255, 255, 80))
+            painter.setFont(QFont('Arial', 28, QFont.Bold))
+            painter.setPen(QColor(0, 0, 0, 120))
+            painter.drawText(rect.adjusted(4, 0, -4, 0),
+                              Qt.AlignRight | Qt.AlignVCenter, str(ref))
+        finally:
+            painter.end()
 
     def _export_atlas_pages(self):
-        """Exporte les feuillets atlas en boucle (1 PDF par feuillet).
+        """Exporte les feuillets atlas en rendant les cartes par lots
+        concurrents (QgsMapRendererParallelJob), puis en écrivant chaque
+        PDF de page à partir de l'image déjà rendue.
 
-        Note historique : on a essayé QgsLayoutExporter.exportToPdf(atlas, …)
-        (API statique multi-pages) mais sur QGIS 3.44 elle prend ~1m30 à
-        échouer silencieusement avant de tomber en fallback. On reste donc
-        sur la boucle manuelle, qui est prévisible et instrumentable.
+        Note historique : QgsLayoutExporter.exportToPdf(atlas, …) (API
+        statique multi-pages) prend ~1m30 à échouer silencieusement sur
+        QGIS 3.44. La boucle séquentielle manuelle (1 exportToPdf par
+        feuillet) fonctionnait mais payait le rendu couche par couche à
+        chaque page sans jamais recouvrir les latences réseau.
+
+        Un premier essai de préchauffage réseau en parallèle (65 jobs
+        recevant tous les MÊMES objets QgsMapLayer) a corrompu le
+        fournisseur WMS (incident du 15/07/2026 : centaines d'erreurs 404
+        rejouées depuis le cache disque). La règle qui en découle : deux
+        QgsMapRendererParallelJob actifs en même temps ne doivent JAMAIS
+        partager le même objet QgsMapLayer — chaque lot clone donc ses
+        propres couches, et un clone n'est utilisé que par un seul job à
+        la fois.
         """
         atlas = self.layout.atlas()
         atlas.updateFeatures()
         count = atlas.count()
-        settings = self._make_atlas_settings()
+        if count == 0:
+            return []
 
-        pdfs = []
-        refs = []
-        exporter = QgsLayoutExporter(self.layout)
-        log_every = max(1, count // 20) if count > 10 else 1
-        sheet_times = []
+        map_items = [it for it in self.layout.items() if isinstance(it, QgsLayoutItemMap)]
+        if not map_items:
+            return []
+        map_item = map_items[0]
 
         nm = getattr(self, '_netmon', None)
+        refs = self._atlas_ref_order()
+
+        w_mm, h_mm = self._page_size_mm()
+        w_px = max(1, int(w_mm / 25.4 * self.dpi))
+        h_px = max(1, int(h_mm / 25.4 * self.dpi))
+
+        project = QgsProject.instance()
+        layers = [n.layer() for n in project.layerTreeRoot().findLayers()
+                  if n.isVisible() and n.layer() is not None]
+
+        # Emprises de toutes les pages via l'atlas lui-même (seekTo ne fait
+        # que mettre à jour l'emprise du map item selon le mode Fixed/Auto
+        # déjà configuré par AtlasCreator — aucun rendu déclenché ici) :
+        # évite de réimplémenter à la main le calcul d'échelle de l'atlas.
+        extents = []
         for i in range(count):
             atlas.seekTo(i)
-            path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
-            self._tmp_files.append(path)
+            extents.append(QgsRectangle(map_item.extent()))
+        atlas.seekTo(0)
 
-            feat = atlas.currentFeature()
-            ref = feat['reference'] if feat.isValid() else f"P{i+1}"
-            refs.append(ref)
+        batch_size = max(2, min(4, os.cpu_count() or 4))
+        pdfs = [None] * count
+        sheet_times = [0.0] * count
+
+        for start in range(0, count, batch_size):
+            idxs = list(range(start, min(start + batch_size, count)))
+            # Un jeu de clones par feuillet du lot : jamais partagé entre
+            # jobs concurrents (cf. note ci-dessus).
+            clone_sets = [[lyr.clone() for lyr in layers] for _ in idxs]
 
             net_snap = nm.snapshot() if nm else None
-            t0 = time.perf_counter()
-            result = exporter.exportToPdf(path, settings)
-            dt = time.perf_counter() - t0
-            sheet_times.append(dt)
-            if result == QgsLayoutExporter.Success:
-                pdfs.append(path)
+            t_batch = time.perf_counter()
+            jobs = []
+            for slot, i in enumerate(idxs):
+                ms = QgsMapSettings()
+                ms.setDestinationCrs(project.crs())
+                ms.setTransformContext(project.transformContext())
+                ms.setLayers(clone_sets[slot])
+                ms.setOutputSize(QSize(w_px, h_px))
+                ms.setExtent(extents[i])
+                ms.setOutputDpi(self.dpi)
+                ms.setBackgroundColor(QColor(255, 255, 255))
+                job = QgsMapRendererParallelJob(ms)
+                job.start()
+                jobs.append((i, job))
 
-            if i % log_every == 0 or i == count - 1:
-                net_str = f" — {nm.delta_str(net_snap)}" if nm else ""
-                self._log(f"   ↳ feuillet {i+1}/{count} [{ref}] : "
-                          f"{self._fmt_dur(dt)}{net_str}", path)
-                self._progress(75 + int(20 * (i + 1) / count))
+            deadline = time.perf_counter() + 60.0
+            while any(j.isActive() for _, j in jobs) and time.perf_counter() < deadline:
                 QApplication.processEvents()
 
-        # Stats récap (utile pour diagnostiquer WMS lent)
+            for i, job in jobs:
+                if job.isActive():
+                    job.cancel()
+                img = job.renderedImage()
+                path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
+                self._tmp_files.append(path)
+                self._write_atlas_page_pdf(path, img, refs[i] if i < len(refs) else f"P{i+1}",
+                                            w_mm, h_mm)
+                pdfs[i] = path
+
+            dt_batch = time.perf_counter() - t_batch
+            for i in idxs:
+                sheet_times[i] = dt_batch / len(idxs)
+            net_str = f" — {nm.delta_str(net_snap)}" if nm else ""
+            self._log(f"   ↳ feuillets {idxs[0] + 1}-{idxs[-1] + 1}/{count} "
+                      f"[{', '.join(refs[i] if i < len(refs) else f'P{i+1}' for i in idxs)}] : "
+                      f"{self._fmt_dur(dt_batch)}{net_str}")
+            self._progress(75 + int(20 * (idxs[-1] + 1) / count))
+            QApplication.processEvents()
+
         if sheet_times:
             avg = sum(sheet_times) / len(sheet_times)
             mx = max(sheet_times)
@@ -967,7 +1042,7 @@ class PdfExporter:
                       f"max {self._fmt_dur(mx)}")
 
         self._cached_refs = refs
-        return pdfs
+        return [p for p in pdfs if p]
 
     # ---------------------------------------------------------------- merge
     def _merge_pdfs(self, pdf_list, output_path, ref_page_map=None):

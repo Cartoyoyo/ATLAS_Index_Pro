@@ -1,0 +1,79 @@
+@startuml ATLAS_Index_Pro_pipeline
+title ATLAS Index Pro — pipeline de génération (v3.1.0)
+
+skinparam activity {
+  BackgroundColor #f5f6f8
+  BorderColor #2c3e50
+  ArrowColor #2980b9
+}
+skinparam activityDiamond {
+  BackgroundColor #eaf2f8
+  BorderColor #2980b9
+}
+
+start
+
+:Sélection couche vecteur, format,\néchelle, extent (dialog.py);
+
+:Étape 0 — GridGenerator.generate()\ngénère la couche "Grille feuillets";
+
+if (Index géographique demandé ?) then (oui)
+  :Étape 1 — Geocoder.get_street_names()\n(BAN / OSM / champ existant);
+  if (Noms de rues introuvables ?) then (oui)
+    :Avertir l'utilisateur;
+    if (Choix ?) then (Réessayer)
+      -> Étape 1;
+    elseif (Continuer sans index)
+      :ctx['sorted_index'] = None;
+    else (Annuler)
+      stop
+    endif
+  endif
+  :Étape 2 — IndexGenerator.generate()\nindex HTML paginé;
+endif
+
+:Étape 3 — AtlasCreator.create()\nQgsPrintLayout + QgsLayoutItemMap\natlas-driven (Fixed/Auto scale);
+
+if (Export PDF demandé ?) then (oui)
+  :Étape 4 — PdfExporter.export();
+
+  partition "PdfExporter._export_impl()" {
+    :_apply_speed_optimizations()\n(cache réseau 500 Mo, rendu parallèle,\nmax 8 threads, antialiasing off);
+    :_generate_cover() — page de garde;
+    :_generate_index() — pages index (si données);
+    :_generate_overview() — plan d'ensemble;
+
+    partition "_export_atlas_pages() — rendu parallèle" {
+      :_atlas_ref_order()\nlit "reference" directement sur\nla couche grille (pas de seekTo);
+      :Capture des emprises de chaque\nfeuillet via atlas.seekTo(i) +\nmap_item.extent() (métadonnée seule,\naucun rendu déclenché);
+
+      repeat :Lot de 2-4 feuillets;
+        :Cloner les couches du projet\n(1 jeu de clones par feuillet du lot —\njamais partagé entre jobs concurrents);
+        :Démarrer un QgsMapRendererParallelJob\npar feuillet (couches clonées,\nQgsMapSettings dédiées);
+        :Attendre la fin du lot\n(timeout de sécurité 60 s, cancel() sinon);
+        :_write_atlas_page_pdf()\nimage rendue + étiquette référence\n→ 1 PDF par feuillet (QPainter/QPrinter);
+      repeat while (Lots restants ?) is (oui)
+      ->non;
+    }
+
+    :_merge_pdfs()\nfusion garde + index + plan\n+ feuillets + page blanche\n(pypdf → PyPDF2 → fallback natif);
+  }
+
+  :atlas_complet.pdf;
+endif
+
+stop
+
+legend right
+  |Couleur|Signification|
+  |<#f5f6f8>|Étape séquentielle|
+  |<#eaf2f8>|Décision utilisateur|
+  ""Incident du 15/07/2026"" : un premier essai de
+  préchauffage réseau donnait les MÊMES objets
+  QgsMapLayer à plusieurs jobs concurrents →
+  corruption du fournisseur WMS (404 en boucle,
+  mis en cache disque). Règle retenue : chaque
+  lot clone ses propres couches.
+endlegend
+
+@enduml

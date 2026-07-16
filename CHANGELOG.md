@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [3.1.0] - 2026-07-16
+
+### Fixed
+- **Crash on atlas export**: `QgsLayoutAtlas` has no `feature()`/`currentFeature()` method in the public PyQGIS API — sheet references are now read directly from the grid layer instead of driving the atlas.
+- Geographic index generation now warns and offers **retry / continue without index / cancel** when street name lookup fails (BAN/OSM unavailable).
+
+### Added
+- **WMS orthophoto coverage tool** (Advanced settings → *Couverture WMS*): detects a scale-limited pre-cached WMS layer (e.g. a tiled orthophoto only covering coarser scales), queries `GetCapabilities` for a non-cached sibling layer, and configures scale-based visibility on both — fixes systematic tile 404s and multi-minute export slowdowns at fine scales.
+
+### Changed
+- **Atlas sheet export rewritten**: sheets are now rendered in concurrent batches (`QgsMapRendererParallelJob`, cloned layers per batch — required for thread safety, since concurrent jobs must never share the same `QgsMapLayer` instance) instead of one `QgsLayoutExporter.exportToPdf()` call per sheet in sequence. Major speedup on WMS-heavy atlases.
+- Label rendering uses `Qgis.TextRenderFormat.AlwaysText` instead of vector outlines — faster and lighter output files.
+
+---
+
 ## [3.0.2] - 2026-06-27
 
 ### Fixed
