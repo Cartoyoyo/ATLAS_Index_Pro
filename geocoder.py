@@ -5,12 +5,15 @@ import logging
 from urllib.request import urlopen, Request
 from qgis.core import (
     QgsCoordinateTransform, QgsProject, QgsCoordinateReferenceSystem,
-    QgsSpatialIndex, QgsFeature, QgsGeometry, QgsPointXY
+    QgsSpatialIndex, QgsFeature, QgsGeometry, QgsPointXY, NULL
 )
 
 # L'API BAN /reverse/csv/ accepte max ~10 000 lignes par requête.
 # On découpe en lots pour rester sous la limite et éviter les timeouts.
 BAN_BATCH_SIZE = 5000
+
+# Valeur sentinelle des objets sans nom (filtrée de l'index)
+UNKNOWN = "Inconnue"
 
 
 class Geocoder:
@@ -22,13 +25,20 @@ class Geocoder:
     """
 
     def __init__(self, layer, crs, field_name=None, source='field',
-                 grid_layer=None, progress_callback=None):
+                 grid_layer=None, progress_callback=None, selected_only=False):
         self.layer = layer
         self.crs = crs
         self.field_name = field_name
         self.source = source
         self.grid_layer = grid_layer  # requis pour 'osm' et fallback BAN
         self.progress_callback = progress_callback
+        # Mode lasso : ne traiter que les objets sélectionnés
+        self.selected_only = selected_only and layer.selectedFeatureCount() > 0
+
+    def _features(self):
+        if self.selected_only:
+            return self.layer.getSelectedFeatures()
+        return self.layer.getFeatures()
 
     def get_street_names(self):
         """Retourne un dict {feature_id: adresse}."""
@@ -54,7 +64,11 @@ class Geocoder:
         )
 
     def _centroid_wgs84(self, feat, transform):
-        pt = transform.transform(feat.geometry().centroid().asPoint())
+        """(lat, lon) du centroïde, ou None si la géométrie est vide."""
+        geom = feat.geometry()
+        if geom is None or geom.isEmpty():
+            return None
+        pt = transform.transform(geom.centroid().asPoint())
         return pt.y(), pt.x()
 
     # ---------------------------------------------------------------- field
@@ -64,10 +78,12 @@ class Geocoder:
             logging.getLogger('ATLAS_Index_Pro').warning(
                 f"Field '{self.field_name}' not found in layer '{self.layer.name()}'"
             )
-            return {feat.id(): "Inconnue" for feat in self.layer.getFeatures()}
-        for feat in self.layer.getFeatures():
+            return {feat.id(): UNKNOWN for feat in self._features()}
+        for feat in self._features():
             val = feat[self.field_name] if self.field_name else None
-            result[feat.id()] = str(val).strip() if val and str(val).strip() else "Inconnue"
+            # 0 est une valeur valide : seul NULL / vide donne « Inconnue »
+            text = '' if val is None or val == NULL else str(val).strip()
+            result[feat.id()] = text or UNKNOWN
         return result
 
     # ---------------------------------------------------------------- OSM
@@ -127,25 +143,29 @@ class Geocoder:
         t_obj = self._to_wgs84(self.layer)
         id_set = set(feature_ids)
 
-        for feat in self.layer.getFeatures():
+        for feat in self._features():
             if feat.id() not in id_set:
                 continue
-            lat, lon = self._centroid_wgs84(feat, t_obj)
+            latlon = self._centroid_wgs84(feat, t_obj)
+            if latlon is None:
+                result[feat.id()] = UNKNOWN
+                continue
+            lat, lon = latlon
             pt = QgsGeometry.fromPointXY(QgsPointXY(lon, lat))
             nearest_ids = road_index.nearestNeighbor(pt.asPoint(), 1)
             if nearest_ids:
                 result[feat.id()] = road_names[nearest_ids[0]]
             else:
-                result[feat.id()] = "Inconnue"
+                result[feat.id()] = UNKNOWN
         return result
 
     def _from_osm(self):
         """Géocodage pur OSM pour tous les objets."""
         roads = self._fetch_osm_roads()
         if not roads:
-            return {feat.id(): "Inconnue" for feat in self.layer.getFeatures()}
+            return {feat.id(): UNKNOWN for feat in self._features()}
         return self._match_osm(
-            [feat.id() for feat in self.layer.getFeatures()],
+            [feat.id() for feat in self._features()],
             roads
         )
 
@@ -164,15 +184,16 @@ class Geocoder:
         csv_bytes = buf.getvalue().encode('utf-8')
 
         # Requête multipart/form-data
+        # Pas de champ « type » : l'API le lit désormais comme un nom de
+        # colonne du CSV et répond 400 (« Unknown column name for type »).
+        # Le nom de voie est lu dans result_street (cf. plus bas).
         boundary = '----BAN_BATCH_BOUNDARY'
         body = (
             f'--{boundary}\r\n'
             f'Content-Disposition: form-data; name="data"; filename="batch.csv"\r\n'
             f'Content-Type: text/csv\r\n\r\n'
         ).encode('utf-8') + csv_bytes + (
-            f'\r\n--{boundary}\r\n'
-            f'Content-Disposition: form-data; name="type"\r\n\r\nstreet\r\n'
-            f'--{boundary}--\r\n'
+            f'\r\n--{boundary}--\r\n'
         ).encode('utf-8')
 
         req = Request(
@@ -190,13 +211,18 @@ class Geocoder:
             reader = csv.DictReader(io.StringIO(resp))
             for row in reader:
                 fid = int(row['fid'])
-                name = (row.get('result_name') or row.get('result_label') or '').strip()
-                result[fid] = name if name else "Inconnue"
+                # result_street = nom de voie seul ; result_name vaut
+                # « 34 Rue X » pour un numéro → seulement pour une voie
+                # ou un lieu-dit (pas de result_street).
+                name = (row.get('result_street') or '').strip()
+                if not name and row.get('result_type') in ('street', 'locality'):
+                    name = (row.get('result_name') or '').strip()
+                result[fid] = name if name else UNKNOWN
         except Exception as e:
             # Si le batch échoue, tout est "Inconnue" → le fallback OSM prendra le relais
             logging.getLogger('ATLAS_Index_Pro').warning(f"BAN reverse CSV batch failed: {e}")
             for fid, _, _ in rows:
-                result[fid] = "Inconnue"
+                result[fid] = UNKNOWN
 
         return result
 
@@ -206,18 +232,21 @@ class Geocoder:
         Les objets restés "Inconnue" sont ensuite traités par
         la méthode OSM (1 requête Overpass pour tous les inconnus).
         """
-        features = list(self.layer.getFeatures())
+        features = list(self._features())
         transform = self._to_wgs84(self.layer)
-        total = len(features)
 
-        # Préparer les coordonnées WGS84 de chaque objet
+        # Préparer les coordonnées WGS84 de chaque objet (géométrie vide → Inconnue)
         rows = []
+        result = {}
         for feat in features:
-            lat, lon = self._centroid_wgs84(feat, transform)
-            rows.append((feat.id(), lat, lon))
+            latlon = self._centroid_wgs84(feat, transform)
+            if latlon is None:
+                result[feat.id()] = UNKNOWN
+            else:
+                rows.append((feat.id(), latlon[0], latlon[1]))
+        total = len(rows)
 
         # Envoi par lots
-        result = {}
         for batch_start in range(0, total, BAN_BATCH_SIZE):
             batch = rows[batch_start:batch_start + BAN_BATCH_SIZE]
             batch_result = self._ban_reverse_csv(batch)
@@ -229,7 +258,7 @@ class Geocoder:
                 )
 
         # Fallback OSM pour les objets non résolus par la BAN
-        unknown_ids = [fid for fid, name in result.items() if name == "Inconnue"]
+        unknown_ids = [fid for fid, name in result.items() if name == UNKNOWN]
         if unknown_ids and self.grid_layer:
             roads = self._fetch_osm_roads()
             if roads:

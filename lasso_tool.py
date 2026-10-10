@@ -11,12 +11,20 @@ class LassoMapTool(QgsMapTool):
     """
 
     lassoFinished = pyqtSignal(QgsGeometry)
+    # Émis quand l'outil est quitté (Échap, autre outil choisi) sans « Terminer »
+    cancelled = pyqtSignal()
 
     def __init__(self, canvas):
         super().__init__(canvas)
         self.canvas = canvas
         self.rubber_band = None
         self.points = []
+        self.closing = False   # True quand le dialogue ferme l'outil lui-même
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.canvas.unsetMapTool(self)
+            event.accept()
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -75,3 +83,6 @@ class LassoMapTool(QgsMapTool):
             self.rubber_band = None
         self.points = []
         super().deactivate()
+        if not self.closing:
+            self.closing = True
+            self.cancelled.emit()

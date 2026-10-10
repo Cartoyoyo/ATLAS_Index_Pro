@@ -8,6 +8,8 @@ class RectangleMapTool(QgsMapTool):
     """Outil carte pour dessiner un rectangle (clic-glisser)."""
 
     rectangleCreated = pyqtSignal(QgsRectangle)
+    # Émis si l'outil est quitté sans rectangle (Échap, autre outil choisi)
+    cancelled = pyqtSignal()
 
     def __init__(self, canvas):
         super().__init__(canvas)
@@ -16,6 +18,12 @@ class RectangleMapTool(QgsMapTool):
         self.start_point = None
         self.end_point = None
         self.is_drawing = False
+        self._done = False
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.canvas.unsetMapTool(self)
+            event.accept()
 
     def canvasPressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -43,6 +51,7 @@ class RectangleMapTool(QgsMapTool):
             rect.normalize()
 
             if rect.width() > 0 and rect.height() > 0:
+                self._done = True
                 self.rectangleCreated.emit(rect)
 
     def _update_rubber_band(self):
@@ -70,3 +79,6 @@ class RectangleMapTool(QgsMapTool):
             self.rubber_band.reset()
             self.rubber_band = None
         super().deactivate()
+        if not self._done:
+            self._done = True
+            self.cancelled.emit()

@@ -16,7 +16,7 @@ from qgis.core import (
 )
 
 from .grid_generator import GridGenerator
-from .geocoder import Geocoder
+from .geocoder import Geocoder, UNKNOWN
 from .index_generator import IndexGenerator
 from .atlas_creator import AtlasCreator
 from .rectangle_tool import RectangleMapTool
@@ -212,6 +212,50 @@ TR = {
         'fr': "Aucun feuillet ne contient d'objet.",  'en': "No sheet contains any object.",
         'es': "Ninguna hoja contiene objetos.",       'pt': "Nenhuma folha contém objetos.",
         'de': "Kein Blatt enthält Objekte."},
+    'err_layer_empty': {
+        'fr': "La couche « {name} » ne contient aucun objet géométrique.",
+        'en': "Layer '{name}' contains no geometry.",
+        'es': "La capa « {name} » no contiene ninguna geometría.",
+        'pt': "A camada « {name} » não contém nenhuma geometria.",
+        'de': "Der Layer „{name}“ enthält keine Geometrie."},
+    'err_crs': {
+        'fr': "Le SCR du projet n'est pas défini. Choisissez un SCR valide.",
+        'en': "Project CRS is not defined. Please set a valid CRS.",
+        'es': "El SRC del proyecto no está definido. Elija un SRC válido.",
+        'pt': "O SRC do projeto não está definido. Escolha um SRC válido.",
+        'de': "Das Projekt-KBS ist nicht definiert. Bitte ein gültiges KBS wählen."},
+    'warn_crs_scale': {
+        'fr': "Le SCR du projet ({crs}) {why} : l'échelle réelle des feuillets "
+              "ne correspondra pas à 1/{scale}.\n\nUtilisez de préférence un SCR "
+              "projeté conforme (ex. Lambert 93 – EPSG:2154).\n\nContinuer quand même ?",
+        'en': "The project CRS ({crs}) {why}: the actual sheet scale will not "
+              "match 1/{scale}.\n\nA conformal projected CRS is recommended "
+              "(e.g. a national grid or UTM zone).\n\nContinue anyway?",
+        'es': "El SRC del proyecto ({crs}) {why}: la escala real de las hojas "
+              "no corresponderá a 1/{scale}.\n\nSe recomienda un SRC proyectado "
+              "conforme.\n\n¿Continuar de todos modos?",
+        'pt': "O SRC do projeto ({crs}) {why}: a escala real das folhas não "
+              "corresponderá a 1/{scale}.\n\nRecomenda-se um SRC projetado "
+              "conforme.\n\nContinuar mesmo assim?",
+        'de': "Das Projekt-KBS ({crs}) {why}: Der tatsächliche Blattmaßstab "
+              "entspricht nicht 1/{scale}.\n\nEmpfohlen wird ein winkeltreues "
+              "projiziertes KBS.\n\nTrotzdem fortfahren?"},
+    'why_geographic': {
+        'fr': "est géographique (degrés)",  'en': "is geographic (degrees)",
+        'es': "es geográfico (grados)",     'pt': "é geográfico (graus)",
+        'de': "ist geographisch (Grad)"},
+    'why_distortion': {
+        'fr': "déforme les distances ici (facteur {k:.2f})",
+        'en': "distorts distances here (factor {k:.2f})",
+        'es': "deforma las distancias aquí (factor {k:.2f})",
+        'pt': "deforma as distâncias aqui (fator {k:.2f})",
+        'de': "verzerrt hier die Entfernungen (Faktor {k:.2f})"},
+    'warn_incomplete': {
+        'fr': "⚠ {n} feuillet(s) incomplet(s) (serveur trop lent, délai dépassé) : {refs}",
+        'en': "⚠ {n} incomplete sheet(s) (server too slow, timeout): {refs}",
+        'es': "⚠ {n} hoja(s) incompleta(s) (servidor lento, tiempo agotado): {refs}",
+        'pt': "⚠ {n} folha(s) incompleta(s) (servidor lento, tempo esgotado): {refs}",
+        'de': "⚠ {n} unvollständige(s) Blatt/Blätter (Server zu langsam): {refs}"},
     'warn_index_empty': {
         'fr': "L'index géographique n'a pas pu être créé "
               "(échec de récupération des noms de rues — BAN/OSM indisponible ou "
@@ -347,7 +391,8 @@ TR = {
 }
 
 
-def _success_body(lang, n, out_dir=None, with_index=False, with_pdf=False):
+def _success_body(lang, n, out_dir=None, with_index=False, with_pdf=False,
+                  incomplete=None):
     _msgs = {
         'fr': ("Génération terminée !", "{n} feuillet(s) créé(s)",
                "Grille", "Index", "PDF", "Mise en page « ATLAS Index Pro » ajoutée au projet"),
@@ -369,6 +414,10 @@ def _success_body(lang, n, out_dir=None, with_index=False, with_pdf=False):
     if with_pdf and out_dir:
         lines.append(f"• {m[4]}   → {out_dir}/atlas_complet.pdf")
     lines.append(f"• {m[5]}")
+    if incomplete:
+        entry = TR['warn_incomplete']
+        lines.append("\n" + entry.get(lang, entry['en']).format(
+            n=len(incomplete), refs=', '.join(incomplete)))
     return "\n".join(lines)
 
 
@@ -443,15 +492,10 @@ class AboutDialog(QDialog):
         sep.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep)
 
-        # Author
-        _author = _meta_vals['author']
-        _email = _meta_vals['email']
-        if _email:
-            lbl_author = QLabel(
-                '<a href="mailto:%s">%s</a>' % (_email, _author)
-            )
-        else:
-            lbl_author = QLabel(_author)
+        # Author (lien LinkedIn)
+        lbl_author = QLabel(
+            '<a href="https://www.linkedin.com/in/ylaloux/">%s</a>' % _meta_vals['author']
+        )
         lbl_author.setOpenExternalLinks(True)
         lbl_author.setAlignment(Qt.AlignCenter)
         layout.addWidget(lbl_author)
@@ -495,8 +539,9 @@ class AtlasDialog(QDialog):
         self.lang = 'fr'
         self.overlap_pct = 0.0
         self.margin_pct = 10.0
-        self.dpi = 96
+        self.dpi = 150
         self._title_user_edited = False
+        self.lasso_tool = None
 
         self.setMinimumWidth(520)
         icon_path = os.path.join(os.path.dirname(__file__), "logo.png")
@@ -505,6 +550,8 @@ class AtlasDialog(QDialog):
         self._init_logger()
         self._build_ui()
         self._retranslate_ui()
+        # Titre par défaut une fois l'orientation traduite (sinon « A4 -  - »)
+        self._update_default_title()
 
     def _init_logger(self):
         """Initialise le fichier log dans le répertoire du plugin."""
@@ -560,6 +607,7 @@ class AtlasDialog(QDialog):
         import warnings
         _layer_filter = (
             QgsMapLayerProxyModel.LineLayer | QgsMapLayerProxyModel.PointLayer
+            | QgsMapLayerProxyModel.PolygonLayer
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -1019,6 +1067,7 @@ class AtlasDialog(QDialog):
     def _on_lang_changed(self, index):
         self.lang = LANGS[index]
         self._retranslate_ui()
+        self._update_default_title()
 
     def _on_format_changed(self, index):
         custom = (index == 12)
@@ -1077,13 +1126,31 @@ class AtlasDialog(QDialog):
         if self.rect_tool is not None:
             try:
                 self.rect_tool.rectangleCreated.disconnect(self._on_rect_drawn)
+                self.rect_tool.cancelled.disconnect(self._on_tool_cancelled)
             except TypeError:
                 pass
         self.rect_tool = RectangleMapTool(self.canvas)
         self.rect_tool.rectangleCreated.connect(self._on_rect_drawn)
+        self.rect_tool.cancelled.connect(self._on_tool_cancelled)
         self.canvas.setMapTool(self.rect_tool)
         self.hide()
         self.iface.messageBar().pushInfo("Atlas", self.tr('dlg_draw_info'))
+
+    def _on_tool_cancelled(self):
+        """Rectangle ou lasso quitté sans valider (Échap, autre outil choisi) :
+        le dialogue réapparaît au lieu de rester caché."""
+        QTimer.singleShot(0, self._after_tool_cancel)
+
+    def _after_tool_cancel(self):
+        if getattr(self, '_lasso_panel', None) is not None:
+            self._finish_lasso(restore_tool=False)
+            return
+        # Échap : plus aucun outil actif → remettre l'outil précédent ;
+        # autre outil choisi par l'utilisateur → le laisser.
+        if self.canvas.mapTool() is None and self.previous_tool:
+            self.canvas.setMapTool(self.previous_tool)
+        self.show()
+        self.raise_()
 
     def _on_rect_drawn(self, rect):
         self.drawn_extent = rect
@@ -1108,14 +1175,17 @@ class AtlasDialog(QDialog):
         layer.removeSelection()
 
         self.previous_tool = self.canvas.mapTool()
-        if hasattr(self, 'lasso_tool') and self.lasso_tool is not None:
+        if self.lasso_tool is not None:
+            self.lasso_tool.closing = True
             try:
                 self.lasso_tool.lassoFinished.disconnect(self._on_lasso_finished)
+                self.lasso_tool.cancelled.disconnect(self._on_tool_cancelled)
             except TypeError:
                 pass
             self.lasso_tool.deleteLater()
         self.lasso_tool = LassoMapTool(self.canvas)
         self.lasso_tool.lassoFinished.connect(self._on_lasso_finished)
+        self.lasso_tool.cancelled.connect(self._on_tool_cancelled)
         self.canvas.setMapTool(self.lasso_tool)
         self.hide()
 
@@ -1213,29 +1283,38 @@ class AtlasDialog(QDialog):
             pw = self._lasso_panel.sizeHint().width()
             self._lasso_panel.move((self.canvas.width() - pw) // 2, 10)
 
-    def _finish_lasso(self):
-        """Valide la sélection lasso et revient au dialog."""
+    def _finish_lasso(self, restore_tool=True):
+        """Valide la sélection lasso et revient au dialog.
+
+        restore_tool=False : l'outil a déjà été quitté (Échap / autre outil),
+        on ne remet l'outil précédent que si plus aucun outil n'est actif.
+        """
         layer = self._lasso_layer if hasattr(self, '_lasso_layer') else None
         n = layer.selectedFeatureCount() if layer else 0
 
         # Libérer l'outil lasso
-        if hasattr(self, 'lasso_tool') and self.lasso_tool is not None:
+        tool = self.lasso_tool
+        if tool is not None:
+            tool.closing = True
             try:
-                self.lasso_tool.lassoFinished.disconnect(self._on_lasso_finished)
+                tool.lassoFinished.disconnect(self._on_lasso_finished)
+                tool.cancelled.disconnect(self._on_tool_cancelled)
             except TypeError:
                 pass
-            self.lasso_tool.deleteLater()
             self.lasso_tool = None
 
         # Supprimer le panneau flottant
-        if hasattr(self, '_lasso_panel') and self._lasso_panel:
+        if getattr(self, '_lasso_panel', None) is not None:
             self._lasso_panel.setParent(None)
             self._lasso_panel.deleteLater()
             self._lasso_panel = None
 
         # Restaurer l'outil carte précédent
-        if self.previous_tool:
+        current = self.canvas.mapTool()
+        if self.previous_tool and (restore_tool or current is None or current is tool):
             self.canvas.setMapTool(self.previous_tool)
+        if tool is not None:
+            tool.deleteLater()
 
         # Mettre à jour le label (le lasso reste en mode 3)
         self.lbl_lasso.setText(
@@ -1255,6 +1334,34 @@ class AtlasDialog(QDialog):
             if new_lang != self.lang:
                 self.lang = new_lang
                 self.combo_lang.setCurrentIndex(LANGS.index(self.lang))
+
+    def _crs_scale_issue(self, crs, layer):
+        """Raison (texte traduit) pour laquelle l'échelle imprimée sera fausse
+        dans ce SCR, ou None. Géographique : pas d'échelle uniforme (plate
+        carrée). Projeté : facteur d'échelle local mesuré sur l'ellipsoïde
+        au centre de la couche (Web Mercator ≈ 0,69 à 46° N)."""
+        if crs.isGeographic():
+            return self.tr('why_geographic')
+        try:
+            from qgis.core import (QgsDistanceArea, QgsCoordinateTransform,
+                                   QgsPointXY, QgsUnitTypes)
+            if crs.mapUnits() != QgsUnitTypes.DistanceMeters:
+                return None
+            project = QgsProject.instance()
+            center = QgsCoordinateTransform(layer.crs(), crs, project).transform(
+                layer.extent().center())
+            da = QgsDistanceArea()
+            da.setSourceCrs(crs, project.transformContext())
+            da.setEllipsoid(project.ellipsoid() if project.ellipsoid() not in ('', 'NONE')
+                            else 'EPSG:7019')
+            d = da.measureLine(QgsPointXY(center.x() - 500, center.y()),
+                               QgsPointXY(center.x() + 500, center.y()))
+            k = d / 1000.0
+            if k > 0 and abs(k - 1.0) > 0.02:
+                return self.tr('why_distortion').format(k=k)
+        except Exception:  # mesure impossible : ne pas bloquer la génération
+            return None
+        return None
 
     def _get_scale(self):
         if self.combo_scale.currentIndex() == 4:
@@ -1360,21 +1467,39 @@ class AtlasDialog(QDialog):
         if not layer:
             QMessageBox.warning(self, self.tr('title_error'), self.tr('err_layer'))
             return
+        if layer.featureCount() == 0 or layer.extent().isNull():
+            QMessageBox.warning(self, self.tr('title_error'),
+                                self.tr('err_layer_empty').format(name=layer.name()))
+            return
 
         crs = QgsProject.instance().crs()
         if not crs.isValid():
-            QMessageBox.warning(self, self.tr('title_error'),
-                                "Project CRS is not defined. Please set a valid CRS.")
+            QMessageBox.warning(self, self.tr('title_error'), self.tr('err_crs'))
             return
 
+        # SCR géographique ou très déformant (Web Mercator…) : l'échelle
+        # imprimée sera fausse → prévenir avant de générer.
+        why = self._crs_scale_issue(crs, layer)
+        if why:
+            answer = QMessageBox.question(
+                self, self.tr('title_warning'),
+                self.tr('warn_crs_scale').format(
+                    crs=crs.authid(), why=why, scale=self._get_scale()),
+                QMessageBox.Yes | QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+
         extent_mode = self.bg_extent.checkedId()
+        # Emprise passée au générateur ; la zone dessinée (self.drawn_extent)
+        # n'est jamais écrasée par l'emprise de la carte.
+        work_extent = self.drawn_extent
         if extent_mode == 1:
             # Emprise de la carte : capturer l'emprise actuelle du canevas
             canvas_ext = self.canvas.extent()
             if canvas_ext.isNull() or canvas_ext.isEmpty():
                 QMessageBox.warning(self, self.tr('title_error'), self.tr('err_extent'))
                 return
-            self.drawn_extent = canvas_ext
+            work_extent = canvas_ext
         if extent_mode == 2 and self.drawn_extent is None:
             QMessageBox.warning(self, self.tr('title_error'), self.tr('err_extent'))
             return
@@ -1400,12 +1525,13 @@ class AtlasDialog(QDialog):
 
         if self.combo_format.currentIndex() == 12:  # Custom
             fmt = 'Custom'
-            custom_w = self.spin_custom_w.value()
-            custom_h = self.spin_custom_h.value()
+            # Stocké (petit côté, grand côté) comme les formats normalisés :
+            # c'est l'orientation choisie qui décide du sens de la page.
+            custom = tuple(sorted((self.spin_custom_w.value(), self.spin_custom_h.value())))
             from . import grid_generator, atlas_creator, pdf_exporter
-            grid_generator.FORMATS_MM['Custom'] = (custom_w, custom_h)
-            atlas_creator.FORMATS_MM['Custom'] = (custom_w, custom_h)
-            pdf_exporter.FORMATS_MM['Custom'] = (custom_w, custom_h)
+            grid_generator.FORMATS_MM['Custom'] = custom
+            atlas_creator.FORMATS_MM['Custom'] = custom
+            pdf_exporter.FORMATS_MM['Custom'] = custom
         else:
             fmt = self.combo_format.currentText()
         orient = 'paysage' if self.combo_orient.currentIndex() == 0 else 'portrait'
@@ -1414,7 +1540,7 @@ class AtlasDialog(QDialog):
         # Stocker le contexte pour les étapes
         self._ctx = {
             'layer': layer, 'crs': crs, 'fmt': fmt, 'orient': orient,
-            'scale': scale, 'extent_mode': extent_mode,
+            'scale': scale, 'extent_mode': extent_mode, 'work_extent': work_extent,
             'out_dir': out_dir, 'field_name': field_name,
             'use_ban': use_ban, 'use_osm': use_osm,
             'with_index': with_index, 'with_pdf': with_pdf,
@@ -1458,7 +1584,7 @@ class AtlasDialog(QDialog):
                     overlap_pct=self.overlap_pct,
                     margin_pct=self.margin_pct,
                     extent_mode=ctx['extent_mode'],
-                    drawn_extent=self.drawn_extent
+                    drawn_extent=ctx['work_extent']
                 )
                 ctx['grid_layer'] = gen.generate(ctx['out_dir'])
                 self._set_progress(25)
@@ -1482,7 +1608,8 @@ class AtlasDialog(QDialog):
                         layer=ctx['layer'], crs=ctx['crs'],
                         field_name=ctx['field_name'],
                         source=source,
-                        grid_layer=ctx['grid_layer'] if (ctx['use_osm'] or ctx['use_ban']) else None
+                        grid_layer=ctx['grid_layer'] if (ctx['use_osm'] or ctx['use_ban']) else None,
+                        selected_only=(ctx['extent_mode'] == 3),
                     )
                     streets = geocoder.get_street_names()
                     self._set_progress(55)
@@ -1506,11 +1633,16 @@ class AtlasDialog(QDialog):
                         crs=ctx['crs'],
                         format_name=ctx['fmt'],
                         orientation=ctx['orient'],
-                        column_title=col_title
+                        column_title=col_title,
+                        lang=self.lang,
+                        selected_only=(ctx['extent_mode'] == 3),
                     )
                     _, ctx['sorted_index'] = idx.generate(ctx['out_dir'])
 
-                    if not ctx['sorted_index']:
+                    # Échec du géocodage = aucun nom autre que « Inconnue »
+                    # (l'index n'est alors jamais vide : il contient « Inconnue »)
+                    named = [k for k in (ctx['sorted_index'] or {}) if k != UNKNOWN]
+                    if not named:
                         self._log(self.tr('warn_index_empty'))
                         msg = QMessageBox(QMessageBox.Warning, self.tr('title_warning'),
                                            self.tr('warn_index_empty'),
@@ -1529,6 +1661,7 @@ class AtlasDialog(QDialog):
                             self._log(self.tr('st_cancelled'))
                             self._generation_cleanup()
                             return
+                        ctx['sorted_index'] = None   # continuer sans index
 
                 self._set_progress(65)
                 self._step = 3
@@ -1565,7 +1698,7 @@ class AtlasDialog(QDialog):
                     self._log(self.tr('st_pdf'), pdf_out)
                     self._set_progress(71, pulse_range=0)
 
-                    from .pdf_exporter import PdfExporter
+                    from .pdf_exporter import PdfExporter, ExportCancelled
                     pdf_title = self.txt_pdf_title.text().strip() or self.tr('pdf_title_ph')
                     col_title = ctx['field_name'] if ctx['field_name'] else None
                     exporter = PdfExporter(
@@ -1582,8 +1715,15 @@ class AtlasDialog(QDialog):
                         progress_callback=lambda v: self._set_progress(v),
                         log_callback=lambda msg, fp=None: self._log(msg, fp),
                         column_title=col_title,
+                        cancel_check=lambda: self._cancelled,
                     )
-                    exporter.export()
+                    try:
+                        exporter.export()
+                    except ExportCancelled:
+                        self._log(self.tr('st_cancelled'))
+                        self._generation_cleanup()
+                        return
+                    ctx['incomplete'] = exporter.incomplete_sheets
 
                 self._step = 5
                 self._next_step()
@@ -1601,7 +1741,8 @@ class AtlasDialog(QDialog):
                                                 ctx['grid_layer'].featureCount(),
                                                 out_dir,
                                                 ctx['with_index'],
-                                                ctx['with_pdf']),
+                                                ctx['with_pdf'],
+                                                ctx.get('incomplete')),
                                   QMessageBox.Ok, self)
                 if out_dir:
                     btn_folder = msg.addButton(
@@ -1804,7 +1945,13 @@ class _AdvancedDialog(QDialog):
             'en': "Detects a scale-limited pre-cached WMS layer and "
                   "automatically adds/configures its non-cached variant for "
                   "finer scales.",
-        }.get(lang, "Détecte une couche WMS précachée limitée en échelle."))
+            'es': "Detecta una capa WMS precacheada limitada en escala y "
+                  "añade/configura su variante no cacheada para escalas más finas.",
+            'pt': "Deteta uma camada WMS pré-armazenada limitada em escala e "
+                  "adiciona/configura a sua variante não armazenada para escalas mais finas.",
+            'de': "Erkennt einen maßstabsbegrenzten vorgecachten WMS-Layer und "
+                  "fügt dessen nicht gecachte Variante für feinere Maßstäbe hinzu.",
+        }.get(lang, "Detects a scale-limited pre-cached WMS layer."))
         desc.setStyleSheet("color: #777; font-size: 8pt; border: none; background: transparent;")
         desc.setWordWrap(True)
         text_col.addWidget(lbl)
@@ -1853,7 +2000,7 @@ class _AdvancedDialog(QDialog):
         from .wms_ortho_fix import fix_ortho_coverage
         main_dlg = self.parent()
         iface = getattr(main_dlg, 'iface', None)
-        fix_ortho_coverage(iface, self)
+        fix_ortho_coverage(iface, self, getattr(main_dlg, 'lang', 'fr'))
 
 
 # Alias pour compatibilité avec plugin.py si nécessaire

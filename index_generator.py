@@ -5,6 +5,38 @@ from qgis.core import (
     QgsSpatialIndex
 )
 
+from .geocoder import UNKNOWN
+
+# Textes de la page HTML (FR / EN / ES / PT / DE)
+_HTML_TR = {
+    'col':     {'fr': "Nom de rue", 'en': "Street name", 'es': "Nombre de calle",
+                'pt': "Nome da rua", 'de': "Straßenname"},
+    'sheets':  {'fr': "Feuillets", 'en': "Sheets", 'es': "Hojas", 'pt': "Folhas",
+                'de': "Blätter"},
+    'entries': {'fr': "entrée(s)", 'en': "entry(ies)", 'es': "entrada(s)",
+                'pt': "entrada(s)", 'de': "Eintrag/Einträge"},
+    'pages':   {'fr': "page(s)", 'en': "page(s)", 'es': "página(s)", 'pt': "página(s)",
+                'de': "Seite(n)"},
+    'page':    {'fr': "Page", 'en': "Page", 'es': "Página", 'pt': "Página", 'de': "Seite"},
+    'search':  {'fr': "Rechercher…", 'en': "Search…", 'es': "Buscar…", 'pt': "Pesquisar…",
+                'de': "Suchen…"},
+    'print':   {'fr': "Imprimer / PDF", 'en': "Print / PDF", 'es': "Imprimir / PDF",
+                'pt': "Imprimir / PDF", 'de': "Drucken / PDF"},
+    'csv':     {'fr': "Exporter CSV", 'en': "Export CSV", 'es': "Exportar CSV",
+                'pt': "Exportar CSV", 'de': "CSV exportieren"},
+    'title':   {'fr': "Index des objets", 'en': "Object index", 'es': "Índice de objetos",
+                'pt': "Índice de objetos", 'de': "Objektverzeichnis"},
+    'orient_paysage':  {'fr': "paysage", 'en': "landscape", 'es': "horizontal",
+                        'pt': "paisagem", 'de': "Querformat"},
+    'orient_portrait': {'fr': "portrait", 'en': "portrait", 'es': "vertical",
+                        'pt': "retrato", 'de': "Hochformat"},
+}
+
+
+def _esc(s):
+    return (str(s).replace('&', '&amp;').replace('<', '&lt;')
+            .replace('>', '&gt;').replace('"', '&quot;'))
+
 
 # Nombre de lignes par colonne selon le format/orientation
 # (hauteur utile en mm / ~5.5 mm par ligne)
@@ -37,14 +69,22 @@ class IndexGenerator:
 
     def __init__(self, conduite_layer, grid_layer, street_names, crs,
                  format_name='A4', orientation='paysage',
-                 column_title=None):
+                 column_title=None, lang='fr', selected_only=False):
         self.conduite_layer = conduite_layer
         self.grid_layer = grid_layer
         self.street_names = street_names
         self.crs = crs
         self.format_name = format_name
         self.orientation = orientation
-        self.column_title = column_title or 'Nom de rue'
+        self.lang = lang
+        self.column_title = column_title or self._tr('col')
+        # Mode lasso : ne traiter que les objets sélectionnés
+        self.selected_only = (selected_only
+                              and conduite_layer.selectedFeatureCount() > 0)
+
+    def _tr(self, key):
+        entry = _HTML_TR[key]
+        return entry.get(self.lang, entry['en'])
 
     def generate(self, output_dir):
         index = self._build_index()
@@ -76,9 +116,11 @@ class IndexGenerator:
             grid_index.addFeature(gf)
 
         index = {}
-        for feat in self.conduite_layer.getFeatures():
+        features = (self.conduite_layer.getSelectedFeatures() if self.selected_only
+                    else self.conduite_layer.getFeatures())
+        for feat in features:
             fid = feat.id()
-            street = self.street_names.get(fid, "Inconnue")
+            street = self.street_names.get(fid, UNKNOWN)
             geom = QgsGeometry(feat.geometry())
             geom.transform(transform)
 
@@ -92,8 +134,11 @@ class IndexGenerator:
         return index
 
     def _sort_index(self, index):
+        """Trie par nom ; écarte les noms sans aucun feuillet (hors emprise)."""
         sorted_idx = {}
         for name in sorted(index.keys(), key=lambda s: s.lower()):
+            if not index[name]:
+                continue
             refs = sorted(
                 index[name],
                 key=lambda r: (
@@ -110,8 +155,13 @@ class IndexGenerator:
         page_css_size = _PAGE_CSS_SIZE.get(key, 'A4 landscape')
         pw_mm, ph_mm = _PAGE_MM.get(key, (297, 210))
 
-        entries = list(index.items())
+        # « Inconnue » n'est pas une entrée d'index (même règle que le PDF)
+        entries = [(k, v) for k, v in index.items() if k != UNKNOWN]
         total_entries = len(entries)
+        col = _esc(self.column_title)
+        sheets = self._tr('sheets')
+        orient_lbl = self._tr('orient_' + self.orientation) \
+            if ('orient_' + self.orientation) in _HTML_TR else self.orientation
 
         # Nombre d'entrées par page (2 colonnes côte à côte)
         per_page = rows_per_col * 2
@@ -130,17 +180,13 @@ class IndexGenerator:
                 l_name, l_refs = left[i] if i < len(left) else ('', [])
                 r_name, r_refs = right[i] if i < len(right) else ('', [])
 
-                def esc(s):
-                    return (s.replace('&', '&amp;').replace('<', '&lt;')
-                             .replace('>', '&gt;').replace('"', '&quot;'))
-
                 rows_html += (
                     f'<tr>'
-                    f'<td class="street">{esc(l_name)}</td>'
-                    f'<td class="refs">{", ".join(l_refs)}</td>'
+                    f'<td class="street">{_esc(l_name)}</td>'
+                    f'<td class="refs">{_esc(", ".join(l_refs))}</td>'
                     f'<td class="divider"></td>'
-                    f'<td class="street">{esc(r_name)}</td>'
-                    f'<td class="refs">{", ".join(r_refs)}</td>'
+                    f'<td class="street">{_esc(r_name)}</td>'
+                    f'<td class="refs">{_esc(", ".join(r_refs))}</td>'
                     f'</tr>\n'
                 )
 
@@ -150,34 +196,37 @@ class IndexGenerator:
             pages_html += f'''
         <div class="page" style="{page_break}">
             <div class="page-header">
-                <span class="title">Index — {self.column_title}</span>
-                <span class="page-num">Page {page_num + 1} / {total_pages}</span>
+                <span class="title">Index — {col}</span>
+                <span class="page-num">{self._tr('page')} {page_num + 1} / {total_pages}</span>
             </div>
             <table class="index-table">
                 <thead>
                     <tr>
-                        <th>{self.column_title}</th>
-                        <th>Feuillets</th>
+                        <th>{col}</th>
+                        <th>{sheets}</th>
                         <th class="divider"></th>
-                        <th>{self.column_title}</th>
-                        <th>Feuillets</th>
+                        <th>{col}</th>
+                        <th>{sheets}</th>
                     </tr>
                 </thead>
                 <tbody>
 {rows_html}                </tbody>
             </table>
-            <div class="page-footer">{total_entries} rue(s) &mdash; {self.format_name} {self.orientation}</div>
+            <div class="page-footer">{total_entries} {self._tr('entries')} &mdash; {_esc(self.format_name)} {orient_lbl}</div>
         </div>'''
 
         # Ratio pour l'aperçu écran (base 900px de large)
         screen_w = 900
         screen_h = round(screen_w * ph_mm / pw_mm)
 
+        csv_header = f"{self.column_title};{sheets}".replace('\\', '\\\\').replace("'", "\\'")
+        csv_header = csv_header.replace('<', '\\x3c')
+
         return f'''<!DOCTYPE html>
-<html lang="fr">
+<html lang="{self.lang}">
 <head>
 <meta charset="UTF-8">
-<title>Index des objets</title>
+<title>{self._tr('title')}</title>
 <style>
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
@@ -326,11 +375,11 @@ td.divider, th.divider {{
 
 <div class="toolbar">
     <input class="search" id="q" type="text"
-           placeholder="Rechercher une rue…"
+           placeholder="{self._tr('search')}"
            oninput="filterRows()">
-    <button class="btn btn-print" onclick="window.print()">&#128438; Imprimer / PDF</button>
-    <button class="btn btn-csv" onclick="exportCsv()">&#128190; Exporter CSV</button>
-    <span style="font-size:.85em;color:#555;">{total_entries} rue(s) &mdash; {total_pages} page(s)</span>
+    <button class="btn btn-print" onclick="window.print()">&#128438; {self._tr('print')}</button>
+    <button class="btn btn-csv" onclick="exportCsv()">&#128190; {self._tr('csv')}</button>
+    <span style="font-size:.85em;color:#555;">{total_entries} {self._tr('entries')} &mdash; {total_pages} {self._tr('pages')}</span>
 </div>
 
 {pages_html}
@@ -345,7 +394,7 @@ function filterRows() {{
 }}
 
 function exportCsv() {{
-    var lines = '\\uFEFFNom de rue;Feuillets\\n';
+    var lines = '\\uFEFF{csv_header}\\n';
     var seen = {{}};
     document.querySelectorAll('.index-table tbody tr').forEach(function(r) {{
         var cells = r.querySelectorAll('td:not(.divider)');

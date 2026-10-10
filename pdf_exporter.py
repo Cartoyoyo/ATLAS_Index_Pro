@@ -1,9 +1,10 @@
 import os
+import re
 import math
 import time
 import platform
 from datetime import date
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import unquote, quote
 
 from qgis.core import (
     QgsLayoutExporter, QgsProject, QgsPrintLayout, QgsLayoutItemMap,
@@ -12,7 +13,7 @@ from qgis.core import (
     QgsLayoutRenderContext, QgsRasterLayer, QgsVectorLayer,
     QgsNetworkAccessManager, Qgis, QgsMapSettings, QgsMapRendererParallelJob
 )
-from qgis.PyQt.QtCore import QMarginsF, QSizeF, QSize, QRect, Qt, QSettings, QUrl
+from qgis.PyQt.QtCore import QSizeF, QSize, QRect, Qt, QSettings
 from qgis.PyQt.QtGui import QTextDocument, QPainter, QFont, QColor
 try:
     from qgis.PyQt.QtGui import QPageSize
@@ -61,7 +62,26 @@ _TR = {
     'overview':      {'fr': "Plan d'ensemble",     'en': "Overview map",
                       'es': "Plano general",       'pt': "Plano geral",
                       'de': "Übersichtskarte"},
+    'cover':         {'fr': "Page de garde",       'en': "Cover page",
+                      'es': "Portada",             'pt': "Capa",        'de': "Titelblatt"},
+    'err_locked':    {'fr': "Le fichier {f} est ouvert dans un autre programme "
+                            "(lecteur PDF ?). Fermez-le puis relancez l'export.",
+                      'en': "The file {f} is open in another program (PDF viewer?). "
+                            "Close it and run the export again.",
+                      'es': "El archivo {f} está abierto en otro programa (¿lector PDF?). "
+                            "Ciérrelo y vuelva a exportar.",
+                      'pt': "O arquivo {f} está aberto noutro programa (leitor de PDF?). "
+                            "Feche-o e exporte novamente.",
+                      'de': "Die Datei {f} ist in einem anderen Programm geöffnet "
+                            "(PDF-Viewer?). Schließen Sie sie und exportieren Sie erneut."},
 }
+
+# Préfixe des liens internes index → feuillet (réécrits en GoTo à la fusion)
+_LINK_PREFIX = 'atlas://ref/'
+
+
+class ExportCancelled(Exception):
+    """Levée quand l'utilisateur annule pendant l'export PDF."""
 
 
 class NetworkMonitor:
@@ -238,7 +258,9 @@ class PdfExporter:
     def __init__(self, layout, grid_layer, index_data, output_dir,
                  title, format_name, orientation, scale, dpi, lang,
                  progress_callback=None, log_callback=None,
-                 column_title=None):
+                 column_title=None, cancel_check=None):
+        self.cancel_check = cancel_check      # callable → True si annulation demandée
+        self.incomplete_sheets = []           # références rendues après délai dépassé
         self.layout = layout
         self.grid_layer = grid_layer
         self.index_data = index_data          # {street: [refs]} ou None
@@ -289,6 +311,23 @@ class PdfExporter:
         if self.progress_cb:
             self.progress_cb(value)
 
+    def _check_cancel(self):
+        """Interrompt l'export si l'utilisateur a demandé l'annulation."""
+        QApplication.processEvents()
+        if self.cancel_check and self.cancel_check():
+            raise ExportCancelled()
+
+    def _check_output_writable(self, path):
+        """Vérifie AVANT le rendu que le PDF final pourra être écrit
+        (fichier ouvert dans un lecteur PDF sous Windows = verrouillé)."""
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, 'ab'):
+                pass
+        except OSError:
+            raise PermissionError(self._tr('err_locked').format(f=path))
+
     def _log(self, msg, filepath=None):
         # Callback UI (dialogue QGIS)
         if self.log_cb:
@@ -312,7 +351,7 @@ class PdfExporter:
         try:
             log_path = os.path.join(self.output_dir, 'atlas_log.txt')
             self._log_fh = open(log_path, 'w', encoding='utf-8')
-            self._log_fh.write(f"=== ATLAS Index Pro — export log ===\n")
+            self._log_fh.write("=== ATLAS Index Pro — export log ===\n")
             self._log_fh.write(f"Date : {date.today().isoformat()} "
                                f"{time.strftime('%H:%M:%S')}\n")
             self._log_fh.write(f"Sortie : {self.output_dir}\n\n")
@@ -524,6 +563,13 @@ class PdfExporter:
         return path
 
     # ---------------------------------------------------------------- index
+    def _ref_link(self, ref):
+        """Référence cliquable : Qt l'exporte en annotation /URI, réécrite
+        en saut interne (GoTo) vers le feuillet lors de la fusion."""
+        return (f'<a href="{_LINK_PREFIX}{quote(str(ref), safe="")}">'
+                f'<span style="color:#2980b9; text-decoration:none;">'
+                f'{self._esc(ref)}</span></a>')
+
     def _generate_index(self, w_mm, h_mm, ref_page_map=None):
         """Génère les pages d'index en 4 colonnes (Rue|Feuillets|Rue|Feuillets).
 
@@ -565,12 +611,12 @@ class PdfExporter:
         for i in range(half):
             # Colonne gauche
             street_l, refs_l = col_left[i]
-            refs_str_l = ', '.join(self._esc(r) for r in refs_l)
+            refs_str_l = ', '.join(self._ref_link(r) for r in refs_l)
 
             # Colonne droite (peut être vide si nombre impair)
             if i < len(col_right):
                 street_r, refs_r = col_right[i]
-                refs_str_r = ', '.join(self._esc(r) for r in refs_r)
+                refs_str_r = ', '.join(self._ref_link(r) for r in refs_r)
             else:
                 street_r, refs_str_r = '', ''
 
@@ -674,10 +720,9 @@ class PdfExporter:
             osm_layer = QgsRasterLayer(osm_uri, "OpenStreetMap", "wms")
             if not osm_layer.isValid():
                 osm_layer = None
-        overview_layers = []
+        overview_layers = [self.grid_layer]
         if osm_layer:
             overview_layers.append(osm_layer)
-        overview_layers.append(self.grid_layer)
 
         map_item.setKeepLayerSet(True)
         map_item.setLayers(overview_layers)
@@ -720,8 +765,7 @@ class PdfExporter:
 
         # ── Étiquettes centrées occupant 80% du cadre ──
         from qgis.core import (
-            QgsPalLayerSettings, QgsVectorLayerSimpleLabeling,
-            QgsTextFormat, QgsProperty
+            QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsProperty
         )
         # Sauvegarder l'étiquetage actuel (clone avant remplacement)
         old_labeling = self.grid_layer.labeling().clone() if self.grid_layer.labeling() else None
@@ -795,20 +839,24 @@ class PdfExporter:
             scalebar_h = max(2, ref_dim * 0.012)
             scalebar_font = max(5, int(ref_dim * 0.033))
             scalebar = QgsLayoutItemScaleBar(layout)
+            layout.addLayoutItem(scalebar)
             scalebar.setLinkedMap(map_item)
             scalebar.setStyle('Single Box')
-            scalebar.setUnits(QgsUnitTypes.DistanceMeters)
-            scalebar.setNumberOfSegments(4)
-            scalebar.setNumberOfSegmentsLeft(0)
             scalebar.setHeight(scalebar_h)
             sb_fmt = QgsTextFormat()
             sb_fmt.setFont(QFont('Arial', scalebar_font))
             scalebar.setTextFormat(sb_fmt)
+            # Sans taille de segment, la barre se réduit à « 0 » :
+            # applyDefaultSize() choisit une longueur ronde (~1/4 de carte)
+            # et les unités (m/km) adaptées à l'emprise.
+            scalebar.applyDefaultSize(QgsUnitTypes.DistanceMeters)
+            scalebar.setNumberOfSegments(4)
+            scalebar.setNumberOfSegmentsLeft(0)
+            scalebar.update()
             scalebar.attemptMove(QgsLayoutPoint(
                 margin, h_mm - margin - footer_h,
                 QgsUnitTypes.LayoutMillimeters
             ))
-            layout.addLayoutItem(scalebar)
 
             # ── Export PDF ──
             exporter = QgsLayoutExporter(layout)
@@ -823,6 +871,11 @@ class PdfExporter:
                 settings.textRenderFormat = Qgis.TextRenderFormat.AlwaysText
             except AttributeError:
                 pass
+            # Pas de géoréférencement GDAL : il réécrit le PDF par mise à
+            # jour incrémentale (objets /Page en double) — inutile dans un
+            # PDF fusionné et source du doublon de page en fusion native.
+            settings.appendGeoreference = False
+            settings.exportMetadata = False
             # NE PAS activer rasterizeWholeImage : bloque le rendu WMS.
             exporter.exportToPdf(path, settings)
         finally:
@@ -990,6 +1043,7 @@ class PdfExporter:
         sheet_times = [0.0] * count
 
         for start in range(0, count, batch_size):
+            self._check_cancel()
             idxs = list(range(start, min(start + batch_size, count)))
             # Un jeu de clones par feuillet du lot : jamais partagé entre
             # jobs concurrents (cf. note ci-dessus).
@@ -1014,10 +1068,21 @@ class PdfExporter:
             deadline = time.perf_counter() + 60.0
             while any(j.isActive() for _, j in jobs) and time.perf_counter() < deadline:
                 QApplication.processEvents()
+                if self.cancel_check and self.cancel_check():
+                    for _, j in jobs:
+                        if j.isActive():
+                            j.cancel()
+                    raise ExportCancelled()
 
             for i, job in jobs:
                 if job.isActive():
+                    # Délai dépassé : l'image est partielle (couches réseau
+                    # non reçues) — le signaler au lieu de l'écrire en silence.
                     job.cancel()
+                    ref = refs[i] if i < len(refs) else f"P{i + 1}"
+                    self.incomplete_sheets.append(ref)
+                    self._log(f"   ⚠ feuillet {ref} : rendu interrompu après 60 s "
+                              f"(image incomplète — serveur WMS lent ?)")
                 img = job.renderedImage()
                 path = os.path.join(self.output_dir, f'_atlas_{i:04d}.pdf')
                 self._tmp_files.append(path)
@@ -1045,31 +1110,70 @@ class PdfExporter:
         return [p for p in pdfs if p]
 
     # ---------------------------------------------------------------- merge
-    def _merge_pdfs(self, pdf_list, output_path, ref_page_map=None):
+    def _outline_entries(self, ref_page_map, index_pages):
+        """Signets : [(titre, page 0-based, enfants)] — même structure pour
+        toutes les méthodes de fusion."""
+        if not ref_page_map:
+            return []
+        first_sheet = min(ref_page_map.values())
+        entries = [(self._tr('cover'), 0, [])]
+        if index_pages:
+            entries.append((self._tr('idx_title'), 1, []))
+        entries.append((self._tr('overview'), first_sheet - 1, []))
+        sheets = [(ref, page, []) for ref, page in ref_page_map.items()]
+        entries.append((self._tr('idx_sheets'), first_sheet, sheets))
+        return entries
+
+    def _merge_pdfs(self, pdf_list, output_path, ref_page_map=None, index_pages=0):
         """Fusionne les PDF. Tente pypdf, PyPDF2, puis fallback pur Python."""
         try:
-            return self._merge_pypdf(pdf_list, output_path, ref_page_map)
+            return self._merge_pypdf(pdf_list, output_path, ref_page_map, index_pages)
         except ImportError:
             pass
         except Exception as e:
             self._log(f"   ↳ pypdf : erreur merge ({e}), tentative PyPDF2…")
         try:
-            return self._merge_pypdf2(pdf_list, output_path, ref_page_map)
+            return self._merge_pypdf2(pdf_list, output_path, ref_page_map, index_pages)
         except ImportError:
             pass
         except Exception as e:
             self._log(f"   ↳ PyPDF2 : erreur merge ({e}), fallback natif…")
-        return self._merge_native(pdf_list, output_path)
+        return self._merge_native(pdf_list, output_path, ref_page_map, index_pages)
 
-    def _merge_native(self, pdf_list, output_path):
+    @staticmethod
+    def _find_obj_end(data, start):
+        """Position du « endobj » de l'objet commençant à `start`, en sautant
+        le contenu d'un éventuel stream (qui peut contenir n'importe quels
+        octets, y compris « endobj » ou « N 0 obj »)."""
+        em = data.find(b'endobj', start)
+        sm = re.compile(rb'stream\r?\n').search(data, start, em if em >= 0 else len(data))
+        if sm is None:
+            return em
+        # (?!\d) : sur « /Length 1234 0 R » (longueur indirecte, écrite par
+        # Qt), empêche le retour arrière qui capturerait « 123 ».
+        lm = re.search(rb'/Length\s+(\d+)(?!\d)(?!\s+\d+\s+R)', data[start:sm.start()])
+        skip = int(lm.group(1)) if lm else 0
+        es = data.find(b'endstream', sm.end() + skip)
+        if es < 0:
+            return -1
+        return data.find(b'endobj', es)
+
+    @staticmethod
+    def _pdf_text(s):
+        """Chaîne PDF UTF-16BE (accents des signets)."""
+        return '<FEFF' + str(s).encode('utf-16-be').hex().upper() + '>'
+
+    def _merge_native(self, pdf_list, output_path, ref_page_map=None, index_pages=0):
         """Fusion PDF en pur Python — zéro dépendance externe.
-        Concatène les pages en réécrivant les objets PDF avec xref valide.
-        Pas de signets, mais produit un PDF lisible par tout lecteur.
+        Concatène les pages en réécrivant les objets PDF avec xref valide,
+        ajoute les signets et convertit les liens de l'index en sauts internes.
+        Prévu pour les PDF produits par Qt (pas de flux d'objets compressés).
         """
-        import re
+        obj_re = re.compile(rb'(\d+)\s+(\d+)\s+obj\b')
+        ref_re = re.compile(rb'(\d+)\s+0\s+R\b')
 
-        all_objects = []   # (new_num, body_bytes)
-        page_nums = []     # new_num des objets /Type /Page
+        all_objects = []   # [new_num, body_bytes]
+        page_nums = []     # new_num des objets /Type /Page, dans l'ordre
         next_num = 1
 
         for pdf_path in pdf_list:
@@ -1078,23 +1182,29 @@ class PdfExporter:
             with open(pdf_path, 'rb') as f:
                 data = f.read()
 
-            # Extraire chaque objet : "N 0 obj ... endobj"
-            objects = []
-            for m in re.finditer(rb'(\d+)\s+0\s+obj\b', data):
-                obj_num = int(m.group(1))
-                body_start = m.end()
-                end_m = re.search(rb'\bendobj\b', data[body_start:])
-                if not end_m:
-                    continue
-                body = data[body_start:body_start + end_m.start()]
-                objects.append((obj_num, body))
+            # Parcours séquentiel ; en cas de mise à jour incrémentale, la
+            # DERNIÈRE définition d'un numéro d'objet est la bonne.
+            objects = {}
+            order = []
+            pos = 0
+            while True:
+                m = obj_re.search(data, pos)
+                if not m:
+                    break
+                end = self._find_obj_end(data, m.end())
+                if end < 0:
+                    break
+                num = int(m.group(1))
+                if num not in objects:
+                    order.append(num)
+                objects[num] = data[m.end():end]
+                pos = end + len(b'endobj')
 
             if not objects:
                 continue
 
-            # Table de renumérotation
             obj_map = {}
-            for old_num, _ in objects:
+            for old_num in order:
                 obj_map[old_num] = next_num
                 next_num += 1
 
@@ -1102,79 +1212,128 @@ class PdfExporter:
                 ref = int(match.group(1))
                 return f'{_map.get(ref, ref)} 0 R'.encode()
 
-            for old_num, body in objects:
+            for old_num in order:
+                body = objects[old_num]
                 new_num = obj_map[old_num]
 
                 # Ignorer les objets Pages, Catalog et XRef sources
-                if re.search(rb'/Type\s*/Pages\b', body):
-                    continue
-                if re.search(rb'/Type\s*/Catalog\b', body):
-                    continue
-                if re.search(rb'/Type\s*/XRef\b', body):
+                if re.search(rb'/Type\s*/(Pages|Catalog|XRef)\b', body):
                     continue
 
                 # Renuméroter les références "N 0 R" SEULEMENT
                 # dans la partie dictionnaire (avant stream)
                 stream_m = re.search(rb'\bstream\r?\n', body)
                 if stream_m:
-                    dict_part = body[:stream_m.start()]
-                    stream_part = body[stream_m.start():]
-                    dict_part = re.sub(rb'(\d+)\s+0\s+R\b', _renum_ref, dict_part)
-                    body = dict_part + stream_part
+                    body = (ref_re.sub(_renum_ref, body[:stream_m.start()])
+                            + body[stream_m.start():])
                 else:
-                    body = re.sub(rb'(\d+)\s+0\s+R\b', _renum_ref, body)
+                    body = ref_re.sub(_renum_ref, body)
 
-                # Détecter les pages
-                is_page = bool(re.search(rb'/Type\s*/Page\b(?!s)', body))
-                if is_page:
+                if re.search(rb'/Type\s*/Page(?![A-Za-z])', body):
                     page_nums.append(new_num)
 
-                all_objects.append((new_num, body))
+                all_objects.append([new_num, body])
 
         if not page_nums:
             return None
 
+        pages_num = next_num
+        catalog_num = pages_num + 1
+        next_num = catalog_num + 1
+
+        # Liens de l'index : annotation /URI atlas://ref/X → destination interne
+        if ref_page_map:
+            link_re = re.compile(
+                rb'/A\s*<<[^<>]*?/URI\s*\(' + re.escape(_LINK_PREFIX.encode())
+                + rb'([^)]*)\)[^<>]*>>')
+
+            def _goto(match):
+                ref = unquote(match.group(1).decode('latin-1'))
+                idx = ref_page_map.get(ref)
+                if idx is None or idx >= len(page_nums):
+                    return match.group(0)
+                return f'/Dest [{page_nums[idx]} 0 R /Fit]'.encode()
+
+            for item in all_objects:
+                if b'/Subtype /Link' in item[1] or b'/Subtype/Link' in item[1]:
+                    item[1] = link_re.sub(_goto, item[1])
+
+        # Signets
+        outline_objs = []
+        outlines_num = None
+        entries = self._outline_entries(ref_page_map, index_pages)
+        if entries:
+            outlines_num = next_num
+            next_num += 1
+
+            def _build(items, parent):
+                nonlocal next_num
+                nums = []
+                for _ in items:
+                    nums.append(next_num)
+                    next_num += 1
+                for k, (title, page, kids) in enumerate(items):
+                    page = min(max(page, 0), len(page_nums) - 1)
+                    d = [f'/Title {self._pdf_text(title)}', f'/Parent {parent} 0 R',
+                         f'/Dest [{page_nums[page]} 0 R /Fit]']
+                    if k > 0:
+                        d.append(f'/Prev {nums[k - 1]} 0 R')
+                    if k < len(items) - 1:
+                        d.append(f'/Next {nums[k + 1]} 0 R')
+                    if kids:
+                        kid_nums = _build(kids, nums[k])
+                        d.append(f'/First {kid_nums[0]} 0 R /Last {kid_nums[-1]} 0 R '
+                                 f'/Count {len(kid_nums)}')
+                    outline_objs.append((nums[k], ('<< ' + ' '.join(d) + ' >>').encode()))
+                return nums
+
+            top = _build(entries, outlines_num)
+            total = len(outline_objs)
+            outline_objs.append((outlines_num, (
+                f'<< /Type /Outlines /First {top[0]} 0 R /Last {top[-1]} 0 R '
+                f'/Count {total} >>').encode()))
+
         # Construire le PDF de sortie avec xref valide
         out = bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
         xref_offsets = {}
-
-        # Écrire tous les objets (avec /Parent corrigé vers notre Pages)
-        pages_num = next_num
         parent_repl = f'/Parent {pages_num} 0 R'.encode()
+        page_set = set(page_nums)
 
         for num, body in all_objects:
             # Réécrire /Parent pour pointer vers notre nouvel objet Pages
-            if num in page_nums:
+            if num in page_set:
                 body = re.sub(rb'/Parent\s+\d+\s+0\s+R', parent_repl, body)
             xref_offsets[num] = len(out)
             out += f'{num} 0 obj'.encode() + body + b'endobj\n'
 
-        # Objet Pages (arbre de pages unique)
         kids = ' '.join(f'{n} 0 R' for n in page_nums)
         xref_offsets[pages_num] = len(out)
         out += (f'{pages_num} 0 obj\n'
                 f'<< /Type /Pages /Kids [{kids}] /Count {len(page_nums)} >>\n'
                 f'endobj\n').encode()
 
-        # Objet Catalog
-        catalog_num = pages_num + 1
+        for num, body in outline_objs:
+            xref_offsets[num] = len(out)
+            out += f'{num} 0 obj\n'.encode() + body + b'\nendobj\n'
+
+        catalog_extra = (f' /Outlines {outlines_num} 0 R /PageMode /UseOutlines'
+                         if outlines_num else '')
         xref_offsets[catalog_num] = len(out)
         out += (f'{catalog_num} 0 obj\n'
-                f'<< /Type /Catalog /Pages {pages_num} 0 R >>\n'
+                f'<< /Type /Catalog /Pages {pages_num} 0 R{catalog_extra} >>\n'
                 f'endobj\n').encode()
 
-        # Table xref complète
-        max_obj = catalog_num
+        # Table xref : chaque entrée fait exactement 20 octets (fin « \r\n »)
+        max_obj = max(xref_offsets)
         xref_start = len(out)
         out += f'xref\n0 {max_obj + 1}\n'.encode()
-        out += b'0000000000 65535 f \r\n'
+        out += b'0000000000 65535 f\r\n'
         for i in range(1, max_obj + 1):
             if i in xref_offsets:
-                out += f'{xref_offsets[i]:010d} 00000 n \r\n'.encode()
+                out += f'{xref_offsets[i]:010d} 00000 n\r\n'.encode()
             else:
-                out += b'0000000000 00000 f \r\n'
+                out += b'0000000000 00000 f\r\n'
 
-        # Trailer
         out += (f'trailer\n<< /Size {max_obj + 1} /Root {catalog_num} 0 R >>\n'
                 f'startxref\n{xref_start}\n%%EOF\n').encode()
 
@@ -1183,8 +1342,9 @@ class PdfExporter:
 
         return output_path
 
-    def _merge_pypdf(self, pdf_list, output_path, ref_page_map):
+    def _merge_pypdf(self, pdf_list, output_path, ref_page_map, index_pages=0):
         from pypdf import PdfWriter, PdfReader
+        from pypdf.generic import NameObject, ArrayObject
 
         writer = PdfWriter()
 
@@ -1193,33 +1353,37 @@ class PdfExporter:
             for page in reader.pages:
                 writer.add_page(page)
 
-        # Ajouter des signets (bookmarks) navigables dans le panneau PDF
+        # Liens de l'index → destination interne vers le feuillet
         if ref_page_map:
-            writer.add_outline_item(
-                self._tr('cover_format'), 0)
+            for page in writer.pages:
+                for annot in page.get('/Annots') or []:
+                    obj = annot.get_object()
+                    action = obj.get('/A')
+                    if action is None:
+                        continue
+                    uri = str(action.get_object().get('/URI', ''))
+                    if not uri.startswith(_LINK_PREFIX):
+                        continue
+                    idx = ref_page_map.get(unquote(uri[len(_LINK_PREFIX):]))
+                    if idx is None or idx >= len(writer.pages):
+                        continue
+                    del obj['/A']
+                    obj[NameObject('/Dest')] = ArrayObject(
+                        [writer.pages[idx].indirect_reference, NameObject('/Fit')])
 
-            idx_start = 1
-            if self.index_data:
-                writer.add_outline_item(
-                    self._tr('idx_title'), idx_start)
-
-            overview_page = min(ref_page_map.values()) - 1 if ref_page_map else 1
-            if overview_page >= 0 and overview_page < len(writer.pages):
-                writer.add_outline_item(
-                    self._tr('overview'), overview_page)
-
-            atlas_parent = writer.add_outline_item(
-                self._tr('idx_sheets'), min(ref_page_map.values()))
-            for ref, page_idx in ref_page_map.items():
-                if page_idx < len(writer.pages):
-                    writer.add_outline_item(
-                        ref, page_idx, parent=atlas_parent)
+        # Signets (bookmarks) navigables dans le panneau PDF
+        def _add(items, parent=None):
+            for title, page, kids in items:
+                if 0 <= page < len(writer.pages):
+                    node = writer.add_outline_item(title, page, parent=parent)
+                    _add(kids, node)
+        _add(self._outline_entries(ref_page_map, index_pages))
 
         with open(output_path, 'wb') as f:
             writer.write(f)
         return output_path
 
-    def _merge_pypdf2(self, pdf_list, output_path, ref_page_map):
+    def _merge_pypdf2(self, pdf_list, output_path, ref_page_map, index_pages=0):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -1229,18 +1393,13 @@ class PdfExporter:
         for pdf_path in pdf_list:
             merger.append(pdf_path)
 
-        if ref_page_map:
-            try:
-                merger.add_outline_item(self._tr('cover_format'), 0)
-                if self.index_data:
-                    merger.add_outline_item(self._tr('idx_title'), 1)
-                overview_page = min(ref_page_map.values()) - 1
-                if overview_page >= 0:
-                    merger.add_outline_item(self._tr('overview'), overview_page)
-                for ref, page_idx in ref_page_map.items():
-                    merger.add_outline_item(ref, page_idx)
-            except Exception:
-                pass
+        try:
+            for title, page, kids in self._outline_entries(ref_page_map, index_pages):
+                node = merger.add_outline_item(title, page)
+                for ref, sheet_page, _ in kids:
+                    merger.add_outline_item(ref, sheet_page, parent=node)
+        except Exception as e:
+            self._log(f"   ↳ PyPDF2 : signets non ajoutés ({e})")
 
         merger.write(output_path)
         merger.close()
@@ -1262,6 +1421,10 @@ class PdfExporter:
             raise FileNotFoundError(f"Output directory does not exist: {self.output_dir}")
         w_mm, h_mm = self._page_size_mm()
 
+        # PDF cible verrouillé (ouvert dans un lecteur) : échouer tout de
+        # suite plutôt qu'après plusieurs minutes de rendu.
+        self._check_output_writable(os.path.join(self.output_dir, 'atlas_complet.pdf'))
+
         # Initialiser le fichier log à côté du PDF de sortie
         self._open_log_file()
 
@@ -1269,6 +1432,12 @@ class PdfExporter:
         self._apply_speed_optimizations()
         try:
             return self._export_impl(w_mm, h_mm)
+        except BaseException as e:
+            # Échec ou annulation : ne pas laisser les PDF intermédiaires
+            if isinstance(e, ExportCancelled):
+                self._log("Export annulé.")
+            self._remove_tmp_files()
+            raise
         finally:
             self._restore_settings()
             self._close_log_file()
@@ -1277,6 +1446,14 @@ class PdfExporter:
                     self._netmon.stop()
                 except Exception:
                     pass
+
+    def _remove_tmp_files(self):
+        for p in self._tmp_files:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
 
     def _export_impl(self, w_mm, h_mm):
         """Implémentation interne de l'export (séparée pour try/finally propre)."""
@@ -1310,6 +1487,7 @@ class PdfExporter:
         snap = self._netmon.snapshot()
         cover_pdf = self._generate_cover(w_mm, h_mm, num_sheets)
         self._step_end(self._netmon.delta_str(snap))
+        self._check_cancel()
 
         # 3) Index (si données disponibles)
         index_pdf = None
@@ -1331,6 +1509,7 @@ class PdfExporter:
         overview_pdf = self._generate_overview(w_mm, h_mm)
         self._step_end(self._netmon.delta_str(snap))
         self._progress(76)
+        self._check_cancel()
 
         # 5) Pages atlas (le plus long)
         self._step_start(f"Feuillets atlas ({num_sheets} pages)")
@@ -1362,7 +1541,8 @@ class PdfExporter:
         all_pdfs.append(blank_pdf)
 
         output_path = os.path.join(self.output_dir, 'atlas_complet.pdf')
-        merged = self._merge_pdfs(all_pdfs, output_path, ref_page_map)
+        self._check_cancel()
+        merged = self._merge_pdfs(all_pdfs, output_path, ref_page_map, index_pages)
         # Taille du PDF final
         size_str = ""
         if merged and os.path.exists(merged):
@@ -1371,12 +1551,7 @@ class PdfExporter:
 
         # Nettoyage des fichiers temporaires seulement si le merge a réussi
         if merged:
-            for p in self._tmp_files:
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except OSError:
-                    pass
+            self._remove_tmp_files()
         else:
             self._log("Fusion impossible — fichiers PDF séparés conservés.")
 
@@ -1384,6 +1559,9 @@ class PdfExporter:
         total = time.perf_counter() - t_global
         self._log("═══════════════════════════════════════════════════════")
         self._log(f"   Export terminé en {self._fmt_dur(total)}")
+        if self.incomplete_sheets:
+            self._log(f"   ⚠ {len(self.incomplete_sheets)} feuillet(s) incomplet(s) "
+                      f"(délai dépassé) : {', '.join(self.incomplete_sheets)}")
         if getattr(self, '_log_fh', None):
             self._log(f"   Log complet : {self._log_fh.name}")
         self._log("═══════════════════════════════════════════════════════")

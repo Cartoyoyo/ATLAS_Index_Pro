@@ -1,6 +1,5 @@
 import os
 import math
-import tempfile
 import warnings
 from qgis.core import (
     QgsVectorLayer, QgsFeature, QgsGeometry, QgsRectangle,
@@ -172,9 +171,19 @@ class GridGenerator:
     def generate(self, output_dir):
         """Génère la grille et la sauvegarde en GeoJSON. Retourne le QgsVectorLayer."""
         extent = self.get_extent()
-        if extent is None or extent.isNull() or extent.isEmpty():
+        if extent is None or extent.isNull():
             raise ValueError("Cannot generate grid: layer extent is empty or invalid.")
         cell_w, cell_h = self.get_cell_size_crs_units()
+
+        # Emprise dégénérée (1 seul point, points alignés, segment
+        # horizontal/vertical) : largeur ou hauteur nulle → isEmpty() vrai.
+        # On l'épaissit d'un millième de cellule pour obtenir au moins
+        # une rangée / colonne de feuillets centrée sur les objets.
+        if extent.width() <= 0 or extent.height() <= 0:
+            cx, cy = extent.center().x(), extent.center().y()
+            half_w = max(extent.width(), cell_w * 1e-3) / 2.0
+            half_h = max(extent.height(), cell_h * 1e-3) / 2.0
+            extent = QgsRectangle(cx - half_w, cy - half_h, cx + half_w, cy + half_h)
 
         # Agrandir l'emprise selon la marge (% de la cellule)
         if self.margin_pct > 0:
@@ -268,24 +277,12 @@ class GridGenerator:
         dp.addFeatures(features_to_add)
         grid_layer.updateExtents()
 
-        # Déterminer le répertoire de sauvegarde (temp si non fourni)
-        save_dir = output_dir if output_dir else tempfile.mkdtemp(prefix='atlas_')
-        output_path = os.path.join(save_dir, 'grille_feuillets.geojson')
-
-        # Sauvegarder le GeoJSON (pour export/log), mais retourner directement
-        # la couche mémoire déjà prête → évite la relecture disque (double I/O).
-        self._save_geojson(grid_layer, output_path)
-
-        # La couche mémoire est déjà valide et peuplée : on la retourne directement.
-        # Fallback vers le fichier seulement si la couche mémoire est vide.
-        if grid_layer.isValid() and grid_layer.featureCount() > 0:
-            return grid_layer
-
-        # Fallback : recharger depuis le fichier si la couche mémoire est invalide
-        saved_layer = QgsVectorLayer(output_path, 'Grille feuillets', 'ogr')
-        if saved_layer.isValid():
-            return saved_layer
-
+        # Sauvegarder le GeoJSON seulement si un répertoire de sortie est
+        # fourni (sinon un dossier temporaire par génération restait sur le
+        # disque) ; la couche mémoire, déjà prête, est retournée telle quelle.
+        if output_dir:
+            self._save_geojson(grid_layer,
+                               os.path.join(output_dir, 'grille_feuillets.geojson'))
         return grid_layer
 
     def _save_geojson(self, layer, path):

@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [Unreleased] - beta test 2026-10-10
+
+### Fixed
+- **BAN geocoding**: the `/reverse/csv/` request sent a `type=street` form field, now read by the API as a CSV column name → HTTP 400 on every call. Field removed; street names read from `result_street` (no house numbers in the index).
+- **Retry / continue without index** dialog never appeared: a failed lookup yields "Inconnue" entries, so the index was never empty. The check now requires at least one real name.
+- **Index hyperlinks**: index references are now real PDF links to their atlas sheet (pypdf and built-in merge).
+- **Built-in PDF merge** (no pypdf): duplicated overview page (GDAL incremental update), invalid xref entries (21 bytes) and no bookmarks — rewritten parser (stream-aware, last definition wins), valid xref, bookmarks and links.
+- **WMS coverage tool**: sibling layer source rebuilt verbatim (lower-cased keys and the bare `styles` token made it invalid), scale ranges were inverted, `authcfg` now applied to GetCapabilities, XML parsed with QDomDocument (Bandit B314/B405), FR/EN messages.
+- **Overview scale bar** showed only "0" (no segment size).
+- Single point / aligned points layer (zero-area extent) failed with a raw error; empty layer now gets a translated message.
+- Locked output PDF (open in a viewer) is detected before rendering; temporary PDFs are removed on failure or cancel.
+- **Cancel** now stops the PDF export (between batches) instead of producing the full PDF.
+- "Current map extent" mode no longer overwrites the drawn rectangle.
+- Escape / switching map tool while drawing a rectangle or lasso brings the dialog back.
+- Custom format: landscape/portrait now follow the chosen orientation whatever the W×H order.
+- Field value `0` was indexed as "Inconnue"; HTML index lists only named entries with sheets; lasso mode geocodes the selection only.
+- Sheets rendered after the 60 s timeout are reported (log + final message) instead of silently written incomplete.
+- Grid without output directory no longer leaves an `atlas_*` temp folder per run.
+- Plugin unload closes the open dialog.
+
+### Changed
+- Polygon layers accepted as source layer.
+- Warning before generating in a geographic CRS or a CRS distorting distances (e.g. Web Mercator): printed scale would be wrong.
+- Default PDF resolution 150 dpi; default PDF title includes the orientation; first bookmark "Cover page".
+- HTML index and WMS tool translated; About: author link to LinkedIn.
+- pyflakes clean (unused imports, f-string, duplicate import).
+
+---
+
 ## [3.1.0] - 2026-07-16
 
 ### Fixed
