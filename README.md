@@ -7,7 +7,7 @@
 **Générateur de feuillets atlas pour QGIS — avec index géographique et export PDF complet**
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.16%2B-green?logo=qgis&logoColor=white)](https://qgis.org)
-[![Version](https://img.shields.io/badge/version-3.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.2.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL%20v3-orange)](LICENSE)
 [![Languages](https://img.shields.io/badge/languages-FR%20%7C%20EN%20%7C%20ES%20%7C%20PT%20%7C%20DE-purple)](README.md)
 
@@ -251,6 +251,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 | Version | Notes |
 |---------|-------|
+| **3.2.0** | Géocodage BAN réparé — Vrais liens index → feuillets dans le PDF — Fusion PDF native corrigée (signets) — Outil couverture WMS réparé — Barre d'échelle du plan d'ensemble — Annulation de l'export — Couches polygones — Avertissement SCR — Enums prêtes pour Qt6 |
 | **3.1.0** | Correction crash export atlas — Outil correction couverture WMS — Export atlas parallélisé (rendu par lots, couches clonées) — Texte natif dans les PDF |
 | **3.0.1** | Corrections mineures — Stabilité améliorée |
 | **3.0.0** | 24 corrections — Fusion PDF universelle sans dépendance externe — Optimisation performance — Titre colonne index dynamique — DPI 150 par défaut — Licence GPL v3 |

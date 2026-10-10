@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## [Unreleased] - beta test 2026-10-10
+## [3.2.0] - 2026-10-10
 
 ### Fixed
 - **BAN geocoding**: the `/reverse/csv/` request sent a `type=street` form field, now read by the API as a CSV column name → HTTP 400 on every call. Field removed; street names read from `result_street` (no house numbers in the index).
@@ -29,7 +29,8 @@ All notable changes to this project are documented in this file.
 - Warning before generating in a geographic CRS or a CRS distorting distances (e.g. Web Mercator): printed scale would be wrong.
 - Default PDF resolution 150 dpi; default PDF title includes the orientation; first bookmark "Cover page".
 - HTML index and WMS tool translated; About: author link to LinkedIn.
-- pyflakes clean (unused imports, f-string, duplicate import).
+- pyflakes clean (unused imports, f-string, duplicate import); Bandit clean (named exceptions).
+- All Qt/QGIS enums scoped (Qt5 and Qt6 compatible).
 
 ---
 
