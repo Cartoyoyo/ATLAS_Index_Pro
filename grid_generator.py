@@ -223,12 +223,12 @@ class GridGenerator:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             dp.addAttributes([
-                QgsField('id', QVariant.Int),
-                QgsField('reference', QVariant.String),
-                QgsField('lettre', QVariant.String),
-                QgsField('numero', QVariant.Int),
-                QgsField('format', QVariant.String),
-                QgsField('echelle', QVariant.Int),
+                QgsField('id', QVariant.Type.Int),
+                QgsField('reference', QVariant.Type.String),
+                QgsField('lettre', QVariant.Type.String),
+                QgsField('numero', QVariant.Type.Int),
+                QgsField('format', QVariant.Type.String),
+                QgsField('echelle', QVariant.Type.Int),
             ])
         grid_layer.updateFields()
 

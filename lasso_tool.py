@@ -22,17 +22,17 @@ class LassoMapTool(QgsMapTool):
         self.closing = False   # True quand le dialogue ferme l'outil lui-même
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.canvas.unsetMapTool(self)
             event.accept()
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             pt = self.toMapCoordinates(event.pos())
             self.points.append(pt)
             self._update_rubber_band()
 
-        elif event.button() == Qt.RightButton:
+        elif event.button() == Qt.MouseButton.RightButton:
             self._finish()
 
     def canvasMoveEvent(self, event):

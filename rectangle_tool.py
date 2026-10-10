@@ -21,12 +21,12 @@ class RectangleMapTool(QgsMapTool):
         self._done = False
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.canvas.unsetMapTool(self)
             event.accept()
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.start_point = self.toMapCoordinates(event.pos())
             self.end_point = self.start_point
             self.is_drawing = True
@@ -39,7 +39,7 @@ class RectangleMapTool(QgsMapTool):
         self._update_rubber_band()
 
     def canvasReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.is_drawing:
+        if event.button() == Qt.MouseButton.LeftButton and self.is_drawing:
             self.end_point = self.toMapCoordinates(event.pos())
             self.is_drawing = False
 

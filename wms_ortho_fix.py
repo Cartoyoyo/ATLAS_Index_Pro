@@ -109,7 +109,7 @@ def _fetch_capabilities_xml(url, authcfg=''):
     if authcfg:
         blocking.setAuthCfg(authcfg)
     err = blocking.get(request, forceRefresh=True)
-    if err != QgsBlockingNetworkRequest.NoError:
+    if err != QgsBlockingNetworkRequest.ErrorCode.NoError:
         raise RuntimeError(f"GetCapabilities ({err}) : {url}\n{blocking.errorMessage()}")
     return bytes(blocking.reply().content()).decode('utf-8', errors='replace')
 
@@ -214,7 +214,7 @@ def fix_ortho_coverage(iface, parent, lang='fr'):
     msg = _tr('confirm', lang, sib=sibling_name, title=sibling_title,
               name=layer.name(), thr=threshold)
     if QMessageBox.question(parent, title, msg,
-                            QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
         return
 
     new_layer = QgsRasterLayer(_sibling_source(layer.source(), sibling_name),

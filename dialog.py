@@ -444,7 +444,7 @@ class AboutDialog(QDialog):
 
         self.setWindowTitle(tr('title'))
         self.setFixedWidth(420)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         icon_path = os.path.join(os.path.dirname(__file__), "logo.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -458,9 +458,9 @@ class AboutDialog(QDialog):
         if os.path.exists(logo_path):
             from qgis.PyQt.QtGui import QPixmap
             lbl_logo = QLabel()
-            pixmap = QPixmap(logo_path).scaledToWidth(160, Qt.SmoothTransformation)
+            pixmap = QPixmap(logo_path).scaledToWidth(160, Qt.TransformationMode.SmoothTransformation)
             lbl_logo.setPixmap(pixmap)
-            lbl_logo.setAlignment(Qt.AlignCenter)
+            lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(lbl_logo)
 
         # Title
@@ -469,7 +469,7 @@ class AboutDialog(QDialog):
         font_title.setBold(True)
         font_title.setPointSize(13)
         lbl_name.setFont(font_title)
-        lbl_name.setAlignment(Qt.AlignCenter)
+        lbl_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_name)
 
         # Lecture metadata.txt (version, author, email)
@@ -483,13 +483,13 @@ class AboutDialog(QDialog):
                             _meta_vals[_k] = _line.split('=', 1)[1].strip()
 
         lbl_version = QLabel("Version " + _meta_vals['version'])
-        lbl_version.setAlignment(Qt.AlignCenter)
+        lbl_version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_version)
 
         # Separator
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep)
 
         # Author (lien LinkedIn)
@@ -497,7 +497,7 @@ class AboutDialog(QDialog):
             '<a href="https://www.linkedin.com/in/ylaloux/">%s</a>' % _meta_vals['author']
         )
         lbl_author.setOpenExternalLinks(True)
-        lbl_author.setAlignment(Qt.AlignCenter)
+        lbl_author.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_author)
 
         # License
@@ -506,7 +506,7 @@ class AboutDialog(QDialog):
             'GNU General Public License v3.0</a>'
         )
         lbl_license.setOpenExternalLinks(True)
-        lbl_license.setAlignment(Qt.AlignCenter)
+        lbl_license.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_license)
 
         # GitHub
@@ -515,7 +515,7 @@ class AboutDialog(QDialog):
             'github.com/Cartoyoyo/ATLAS_Index_Pro</a>'
         )
         lbl_github.setOpenExternalLinks(True)
-        lbl_github.setAlignment(Qt.AlignCenter)
+        lbl_github.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_github)
 
         # Close button
@@ -579,7 +579,7 @@ class AtlasDialog(QDialog):
             self.lbl_status.setText(f"{msg}  ·  📄 {fname}")
         else:
             self.lbl_status.setText(msg)
-        QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
     def tr(self, key):
         entry = TR.get(key)
@@ -606,8 +606,8 @@ class AtlasDialog(QDialog):
         self.combo_layer = QgsMapLayerComboBox()
         import warnings
         _layer_filter = (
-            QgsMapLayerProxyModel.LineLayer | QgsMapLayerProxyModel.PointLayer
-            | QgsMapLayerProxyModel.PolygonLayer
+            QgsMapLayerProxyModel.Filter.LineLayer | QgsMapLayerProxyModel.Filter.PointLayer
+            | QgsMapLayerProxyModel.Filter.PolygonLayer
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -903,8 +903,8 @@ class AtlasDialog(QDialog):
 
         # ── Séparateur ──
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
         outer.addWidget(sep)
 
         # --- Boutons bas ---
@@ -958,7 +958,7 @@ class AtlasDialog(QDialog):
         self.btn_about = QPushButton()
         self.btn_about.setFixedWidth(90)
         self.btn_about.setFixedHeight(28)
-        self.btn_about.setCursor(Qt.PointingHandCursor)
+        self.btn_about.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_about.setStyleSheet(
             "QPushButton{background:#7f8c8d;color:#fff;border-radius:5px;"
             "font-weight:bold;font-size:11px}"
@@ -968,7 +968,7 @@ class AtlasDialog(QDialog):
         row.addWidget(self.btn_about)
         row.addStretch()
         self.btn_gen = QPushButton()
-        self.btn_gen.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self.btn_gen.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
         self.btn_gen.setStyleSheet(
             "QPushButton{background:#27ae60;color:#fff;padding:9px 28px;"
             "border-radius:5px} QPushButton:hover{background:#219a52}"
@@ -1205,7 +1205,7 @@ class AtlasDialog(QDialog):
         panel_layout.addWidget(self._lasso_label)
 
         btn_finish = QPushButton(self.tr('lasso_finish'))
-        btn_finish.setCursor(Qt.PointingHandCursor)
+        btn_finish.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_finish.setStyleSheet(
             "QPushButton{background:#27ae60;color:#fff;padding:6px 16px;"
             "border-radius:4px;font-weight:bold;font-size:10pt}"
@@ -1215,7 +1215,7 @@ class AtlasDialog(QDialog):
         panel_layout.addWidget(btn_finish)
 
         btn_reset = QPushButton(self.tr('lasso_reset'))
-        btn_reset.setCursor(Qt.PointingHandCursor)
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset.setStyleSheet(
             "QPushButton{background:#c0392b;color:#fff;padding:6px 16px;"
             "border-radius:4px;font-weight:bold;font-size:10pt}"
@@ -1258,7 +1258,7 @@ class AtlasDialog(QDialog):
         # AJOUTER à la sélection existante (pas remplacer)
         from qgis.core import QgsVectorLayer
         current = list(layer.selectedFeatureIds())
-        layer.selectByIds(current + new_ids, QgsVectorLayer.SetSelection)
+        layer.selectByIds(current + new_ids, QgsVectorLayer.SelectBehavior.SetSelection)
 
         # Mettre à jour le compteur sur le panneau flottant
         n = layer.selectedFeatureCount()
@@ -1391,15 +1391,15 @@ class AtlasDialog(QDialog):
             pal.placement = Qgis.LabelPlacement.OverPoint
             pal.quadOffset = Qgis.LabelQuadrantPosition.AboveLeft
         except (AttributeError, ImportError):
-            pal.placement = QgsPalLayerSettings.OverPoint
-            pal.quadOffset = QgsPalLayerSettings.QuadrantAboveLeft
+            pal.placement = QgsPalLayerSettings.Placement.OverPoint
+            pal.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAboveLeft
 
         pal.dataDefinedProperties().setProperty(
-            QgsPalLayerSettings.PositionX,
+            QgsPalLayerSettings.Property.PositionX,
             QgsProperty.fromExpression('x_max($geometry)')
         )
         pal.dataDefinedProperties().setProperty(
-            QgsPalLayerSettings.PositionY,
+            QgsPalLayerSettings.Property.PositionY,
             QgsProperty.fromExpression('y_min($geometry)')
         )
 
@@ -1407,7 +1407,7 @@ class AtlasDialog(QDialog):
         pal.minimumScale = scale
 
         fmt = QgsTextFormat()
-        fmt.setFont(QFont('Arial', 8, QFont.Bold))
+        fmt.setFont(QFont('Arial', 8, QFont.Weight.Bold))
         fmt.setSize(8)
         pal.setFormat(fmt)
 
@@ -1452,7 +1452,7 @@ class AtlasDialog(QDialog):
         self.progress.setValue(value)
         self._pulse_base = value
         self._pulse_range = pulse_range
-        QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
     def _next_step(self):
         """Planifie l'exécution de la prochaine étape (rend la main à Qt)."""
@@ -1485,8 +1485,8 @@ class AtlasDialog(QDialog):
                 self, self.tr('title_warning'),
                 self.tr('warn_crs_scale').format(
                     crs=crs.authid(), why=why, scale=self._get_scale()),
-                QMessageBox.Yes | QMessageBox.No)
-            if answer != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
                 return
 
         extent_mode = self.bg_extent.checkedId()
@@ -1644,13 +1644,13 @@ class AtlasDialog(QDialog):
                     named = [k for k in (ctx['sorted_index'] or {}) if k != UNKNOWN]
                     if not named:
                         self._log(self.tr('warn_index_empty'))
-                        msg = QMessageBox(QMessageBox.Warning, self.tr('title_warning'),
+                        msg = QMessageBox(QMessageBox.Icon.Warning, self.tr('title_warning'),
                                            self.tr('warn_index_empty'),
-                                           QMessageBox.NoButton, self)
-                        btn_retry = msg.addButton(self.tr('btn_retry'), QMessageBox.YesRole)
+                                           QMessageBox.StandardButton.NoButton, self)
+                        btn_retry = msg.addButton(self.tr('btn_retry'), QMessageBox.ButtonRole.YesRole)
                         btn_skip = msg.addButton(self.tr('btn_continue_no_index'),
-                                                  QMessageBox.NoRole)
-                        msg.addButton(QMessageBox.Cancel)
+                                                  QMessageBox.ButtonRole.NoRole)
+                        msg.addButton(QMessageBox.StandardButton.Cancel)
                         msg.exec_()
                         clicked = msg.clickedButton()
                         if clicked == btn_retry:
@@ -1735,7 +1735,7 @@ class AtlasDialog(QDialog):
                 self._generation_cleanup()
 
                 out_dir = ctx['out_dir']
-                msg = QMessageBox(QMessageBox.Information,
+                msg = QMessageBox(QMessageBox.Icon.Information,
                                   self.tr('title_success'),
                                   _success_body(self.lang,
                                                 ctx['grid_layer'].featureCount(),
@@ -1743,10 +1743,10 @@ class AtlasDialog(QDialog):
                                                 ctx['with_index'],
                                                 ctx['with_pdf'],
                                                 ctx.get('incomplete')),
-                                  QMessageBox.Ok, self)
+                                  QMessageBox.StandardButton.Ok, self)
                 if out_dir:
                     btn_folder = msg.addButton(
-                        self.tr('btn_open_folder'), QMessageBox.ActionRole)
+                        self.tr('btn_open_folder'), QMessageBox.ButtonRole.ActionRole)
                 msg.exec_()
                 if out_dir and msg.clickedButton() == btn_folder:
                     from qgis.PyQt.QtCore import QUrl
@@ -1822,10 +1822,10 @@ class _AdvancedDialog(QDialog):
             spin.setSuffix(" %")
             spin.setDecimals(1)
             spin.setStyleSheet(self._SPIN_STYLE)
-            spin.setAlignment(Qt.AlignCenter)
+            spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             row.addLayout(text_col, 1)
-            row.addWidget(spin, 0, Qt.AlignVCenter)
+            row.addWidget(spin, 0, Qt.AlignmentFlag.AlignVCenter)
             main.addWidget(card)
             spins.append(spin)
 
@@ -1857,10 +1857,10 @@ class _AdvancedDialog(QDialog):
             " padding:5px 8px; font-size:10pt; min-width:80px; }"
             "QSpinBox:focus { border-color:#2980b9; }"
         )
-        self.sp_dpi.setAlignment(Qt.AlignCenter)
+        self.sp_dpi.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         row.addLayout(text_col, 1)
-        row.addWidget(self.sp_dpi, 0, Qt.AlignVCenter)
+        row.addWidget(self.sp_dpi, 0, Qt.AlignmentFlag.AlignVCenter)
         main.addWidget(card)
 
         # --- Carte Langue ---
@@ -1921,7 +1921,7 @@ class _AdvancedDialog(QDialog):
         """)
 
         row.addLayout(text_col, 1)
-        row.addWidget(self.combo_lang, 0, Qt.AlignVCenter)
+        row.addWidget(self.combo_lang, 0, Qt.AlignmentFlag.AlignVCenter)
         main.addWidget(card)
 
         # --- Carte couverture WMS (détection couche non précachée) ---
@@ -1969,25 +1969,25 @@ class _AdvancedDialog(QDialog):
         btn_wms_fix.clicked.connect(self._fix_wms_coverage)
 
         row.addLayout(text_col, 1)
-        row.addWidget(btn_wms_fix, 0, Qt.AlignVCenter)
+        row.addWidget(btn_wms_fix, 0, Qt.AlignmentFlag.AlignVCenter)
         main.addWidget(card)
 
         # Séparateur
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("border: none; border-top: 1px solid #dde1e7;")
         main.addWidget(sep)
 
         # Boutons
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        bb.button(QDialogButtonBox.Ok).setStyleSheet(
+        bb.button(QDialogButtonBox.StandardButton.Ok).setStyleSheet(
             "QPushButton { background:#27ae60; color:#fff; border:none;"
             " border-radius:4px; padding:6px 22px; font-size:9pt; }"
             "QPushButton:hover { background:#219a52; }"
         )
-        bb.button(QDialogButtonBox.Cancel).setStyleSheet(
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setStyleSheet(
             "QPushButton { border:1px solid #bbb; border-radius:4px;"
             " padding:6px 16px; font-size:9pt; }"
             "QPushButton:hover { background:#e8e8e8; }"

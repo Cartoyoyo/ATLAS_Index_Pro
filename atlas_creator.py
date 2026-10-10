@@ -72,7 +72,7 @@ class AtlasCreator:
         label = QgsLayoutItemLabel(layout)
         label.setText('[% "reference" %]')
         fmt = QgsTextFormat()
-        fmt.setFont(QFont('Arial', 28, QFont.Bold))
+        fmt.setFont(QFont('Arial', 28, QFont.Weight.Bold))
         fmt.setColor(QColor(0, 0, 0, 120))
         label.setTextFormat(fmt)
         label.setBackgroundEnabled(True)
@@ -85,8 +85,8 @@ class AtlasCreator:
         label.attemptResize(QgsLayoutSize(
             label_w, label_h, QgsUnitTypes.LayoutMillimeters
         ))
-        label.setHAlign(Qt.AlignRight)
-        label.setVAlign(Qt.AlignBottom)
+        label.setHAlign(Qt.AlignmentFlag.AlignRight)
+        label.setVAlign(Qt.AlignmentFlag.AlignBottom)
         layout.addLayoutItem(label)
 
         # ── Configuration de l'Atlas ──
@@ -102,10 +102,10 @@ class AtlasCreator:
         # SCR projeté (mètres) : échelle fixe
         crs = project.crs()
         if crs.isGeographic():
-            map_item.setAtlasScalingMode(QgsLayoutItemMap.Auto)
+            map_item.setAtlasScalingMode(QgsLayoutItemMap.AtlasScalingMode.Auto)
             map_item.setAtlasMargin(0.0)
         else:
-            map_item.setAtlasScalingMode(QgsLayoutItemMap.Fixed)
+            map_item.setAtlasScalingMode(QgsLayoutItemMap.AtlasScalingMode.Fixed)
 
         # Ajout au manager, rafraîchir, positionner, PUIS forcer l'échelle
         manager.addLayout(layout)

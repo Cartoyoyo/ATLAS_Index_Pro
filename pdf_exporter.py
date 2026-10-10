@@ -155,7 +155,7 @@ class NetworkMonitor:
             url = params.request().url()
             host = url.host() or '?'
             self.hosts[host] = self.hosts.get(host, 0) + 1
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
 
     def _on_finished(self, reply_content):
@@ -178,7 +178,7 @@ class NetworkMonitor:
             from_cache_attr = reply_content.attribute(3)  # SourceIsFromCacheAttribute
             if from_cache_attr:
                 self.from_cache += 1
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
     def summary(self):
@@ -247,7 +247,7 @@ def _extract_wms_url(layer):
         for part in src.split('&'):
             if part.lower().startswith('url='):
                 return unquote(part[4:])[:120]
-    except Exception:
+    except (AttributeError, RuntimeError):
         pass
     return "(URL inconnue)"
 
@@ -302,7 +302,7 @@ class PdfExporter:
         printer.setResolution(self._PRINTER_DPI)   # ← force 150 DPI au lieu de 1200
         printer.setOutputFormat(QPrinter.PdfFormat)
         printer.setOutputFileName(path)
-        page_size = QPageSize(QSizeF(w_mm, h_mm), QPageSize.Millimeter)
+        page_size = QPageSize(QSizeF(w_mm, h_mm), QPageSize.Unit.Millimeter)
         printer.setPageSize(page_size)
         printer.setPageMargins(10, 10, 10, 10, QPrinter.Millimeter)
         return printer
@@ -462,7 +462,7 @@ class PdfExporter:
                         for part in src.split('&'):
                             if part.lower().startswith(keys):
                                 self._log(f"│       ↳ {part}")
-                    except Exception:
+                    except (AttributeError, RuntimeError):
                         pass
             if wms_count:
                 self._log(f"│  → {wms_count} couche(s) réseau (impact direct sur la vitesse)")
@@ -787,11 +787,11 @@ class PdfExporter:
             pal.placement = Qgis.LabelPlacement.OverPoint
             pal.quadOffset = Qgis.LabelQuadrantPosition.Over
         except (AttributeError, ImportError):
-            pal.placement = QgsPalLayerSettings.OverPoint
-            pal.quadOffset = QgsPalLayerSettings.QuadrantOver
+            pal.placement = QgsPalLayerSettings.Placement.OverPoint
+            pal.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantOver
 
         fmt = QgsTextFormat()
-        fmt.setFont(QFont('Arial', 10, QFont.Bold))
+        fmt.setFont(QFont('Arial', 10, QFont.Weight.Bold))
         fmt.setColor(QColor(44, 62, 80, 180))
         # Taille en unités carte (mm sur la carte) pour s'adapter au zoom
         fmt.setSizeUnit(QgsUnitTypes.RenderMapUnits)
@@ -804,7 +804,7 @@ class PdfExporter:
         # Data-defined size : 80% de la hauteur de la bbox de chaque cellule
         # divisé par un facteur pour que le texte rentre en largeur aussi
         pal.dataDefinedProperties().setProperty(
-            QgsPalLayerSettings.Size,
+            QgsPalLayerSettings.Property.Size,
             QgsProperty.fromExpression(
                 'bounds_height($geometry) * 0.8 / max(1.2, length("reference") * 0.55)'
             )
@@ -822,7 +822,7 @@ class PdfExporter:
             title_label = QgsLayoutItemLabel(layout)
             title_label.setText(self._tr('overview'))
             title_fmt = QgsTextFormat()
-            title_fmt.setFont(QFont('Arial', title_pt, QFont.Bold))
+            title_fmt.setFont(QFont('Arial', title_pt, QFont.Weight.Bold))
             title_fmt.setColor(QColor(44, 62, 80))
             title_label.setTextFormat(title_fmt)
             title_label.attemptMove(QgsLayoutPoint(
@@ -831,8 +831,8 @@ class PdfExporter:
             title_label.attemptResize(QgsLayoutSize(
                 map_w, header_h, QgsUnitTypes.LayoutMillimeters
             ))
-            title_label.setHAlign(Qt.AlignCenter)
-            title_label.setVAlign(Qt.AlignVCenter)
+            title_label.setHAlign(Qt.AlignmentFlag.AlignCenter)
+            title_label.setVAlign(Qt.AlignmentFlag.AlignVCenter)
             layout.addLayoutItem(title_label)
 
             # ── Barre d'échelle (taille proportionnelle) ──
@@ -957,7 +957,7 @@ class PdfExporter:
         printer.setResolution(self.dpi)
         printer.setOutputFormat(QPrinter.PdfFormat)
         printer.setOutputFileName(path)
-        printer.setPageSize(QPageSize(QSizeF(w_mm, h_mm), QPageSize.Millimeter))
+        printer.setPageSize(QPageSize(QSizeF(w_mm, h_mm), QPageSize.Unit.Millimeter))
         printer.setFullPage(True)
         printer.setPageMargins(0, 0, 0, 0, QPrinter.Millimeter)
 
@@ -979,10 +979,10 @@ class PdfExporter:
                 int(label_h_mm / 25.4 * self.dpi),
             )
             painter.fillRect(rect, QColor(255, 255, 255, 80))
-            painter.setFont(QFont('Arial', 28, QFont.Bold))
+            painter.setFont(QFont('Arial', 28, QFont.Weight.Bold))
             painter.setPen(QColor(0, 0, 0, 120))
             painter.drawText(rect.adjusted(4, 0, -4, 0),
-                              Qt.AlignRight | Qt.AlignVCenter, str(ref))
+                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(ref))
         finally:
             painter.end()
 
@@ -1444,7 +1444,7 @@ class PdfExporter:
             if hasattr(self, '_netmon') and self._netmon:
                 try:
                     self._netmon.stop()
-                except Exception:
+                except (TypeError, RuntimeError):
                     pass
 
     def _remove_tmp_files(self):
