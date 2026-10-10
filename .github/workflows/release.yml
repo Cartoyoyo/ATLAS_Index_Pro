@@ -37,22 +37,32 @@ jobs:
           zip -r ATLAS_Index_Pro.zip ATLAS_Index_Pro/
           echo "ZIP créé : $(du -sh ATLAS_Index_Pro.zip | cut -f1)"
 
+      # Upload par l'API XML-RPC de plugins.qgis.org (l'ancienne URL
+      # /plugins/api/v2/plugins/upload/ répondait 404). Un échec fait échouer
+      # le run : pas de continue-on-error, sinon le run reste vert à tort.
       - name: Upload vers plugins.qgis.org
-        continue-on-error: true
+        env:
+          OSGEO_USERNAME: ${{ secrets.OSGEO_USERNAME }}
+          OSGEO_PASSWORD: ${{ secrets.OSGEO_PASSWORD }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            -u "${{ secrets.QGIS_USERNAME }}:${{ secrets.QGIS_PASSWORD }}" \
-            -F "package=@/tmp/ATLAS_Index_Pro.zip" \
-            https://plugins.qgis.org/plugins/api/v2/plugins/upload/)
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Réponse : $BODY"
-          echo "Code HTTP : $HTTP_CODE"
-          if [ "$HTTP_CODE" != "201" ]; then
-            echo "::warning::Upload QGIS échoué (code $HTTP_CODE) — vérifier les secrets QGIS_USERNAME/QGIS_PASSWORD"
-            exit 1
-          fi
-          echo "Upload réussi !"
+          python3 - <<'EOF'
+          import os, sys, urllib.parse, xmlrpc.client
+          user = os.environ.get('OSGEO_USERNAME', '')
+          password = os.environ.get('OSGEO_PASSWORD', '')
+          if not user or not password:
+              sys.exit("::error::Secrets OSGEO_USERNAME / OSGEO_PASSWORD absents")
+          url = (f"https://{urllib.parse.quote(user, safe='')}:"
+                 f"{urllib.parse.quote(password, safe='')}@plugins.qgis.org/plugins/RPC2/")
+          with open('/tmp/ATLAS_Index_Pro.zip', 'rb') as f:
+              data = xmlrpc.client.Binary(f.read())
+          try:
+              result = xmlrpc.client.ServerProxy(url).plugin.upload(data)
+          except xmlrpc.client.ProtocolError as e:
+              sys.exit(f"::error::Upload refusé : HTTP {e.errcode} {e.errmsg}")
+          except xmlrpc.client.Fault as e:
+              sys.exit(f"::error::Upload refusé par le dépôt : {e.faultString}")
+          print(f"Upload réussi : plugin/version {result}")
+          EOF
 
       - name: Créer une Release GitHub
         uses: softprops/action-gh-release@v2
